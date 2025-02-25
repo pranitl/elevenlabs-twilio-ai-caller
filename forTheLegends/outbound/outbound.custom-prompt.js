@@ -1,5 +1,3 @@
-// Code for authenticated outbound calls & setting custom parameters with your agent
-
 import WebSocket from "ws";
 import Twilio from "twilio";
 
@@ -48,23 +46,61 @@ export function registerOutboundRoutes(fastify) {
 
   // Route to initiate outbound calls
   fastify.post("/outbound-call", async (request, reply) => {
-    const { number } = request.body;
-
-    if (!number) {
-      return reply.code(400).send({ error: "Phone number is required" });
-    }
-
     try {
+      // Process the lead data from the request
+      const leadData = request.body;
+
+      // Validate the lead data
+      if (!Array.isArray(leadData) || leadData.length === 0) {
+        return reply.code(400).send({ 
+          success: false, 
+          error: "Invalid lead data format. Expected a non-empty array." 
+        });
+      }
+
+      const lead = leadData[0]; // Get the first lead from the array
+
+      // Extract phone number and prompt
+      if (!lead.PhoneNumber && !lead.prompt) {
+        return reply.code(400).send({ 
+          success: false, 
+          error: "Lead data must contain either PhoneNumber or a phone number in the prompt" 
+        });
+      }
+
+      // Extract phone number - either directly from PhoneNumber field or extract from prompt
+      let phoneNumber = lead.PhoneNumber;
+      if (!phoneNumber && lead.prompt) {
+        // Try to find a phone number in the prompt using regex
+        const phoneRegex = /\+\d{10,15}/;
+        const match = lead.prompt.match(phoneRegex);
+        if (match) {
+          phoneNumber = match[0];
+        }
+      }
+
+      if (!phoneNumber) {
+        return reply.code(400).send({ 
+          success: false, 
+          error: "Could not determine phone number from lead data" 
+        });
+      }
+
+      // Prepare the lead data as JSON string to pass to TwiML
+      const leadDataJson = JSON.stringify(lead);
+
+      // Initiate the call
       const call = await twilioClient.calls.create({
         from: TWILIO_PHONE_NUMBER,
-        to: number,
-        url: `https://${request.headers.host}/outbound-call-twiml`
+        to: phoneNumber,
+        url: `https://${request.headers.host}/outbound-call-twiml?leadData=${encodeURIComponent(leadDataJson)}`
       });
 
       reply.send({ 
         success: true, 
         message: "Call initiated", 
-        callSid: call.sid 
+        callSid: call.sid,
+        leadData: lead
       });
     } catch (error) {
       console.error("Error initiating outbound call:", error);
@@ -77,10 +113,14 @@ export function registerOutboundRoutes(fastify) {
 
   // TwiML route for outbound calls
   fastify.all("/outbound-call-twiml", async (request, reply) => {
+    const leadData = request.query.leadData || '{}';
+
     const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
       <Response>
         <Connect>
-          <Stream url="wss://${request.headers.host}/outbound-media-stream" />
+          <Stream url="wss://${request.headers.host}/outbound-media-stream">
+            <Parameter name="leadData" value="${leadData}" />
+          </Stream>
         </Connect>
       </Response>`;
 
@@ -96,6 +136,7 @@ export function registerOutboundRoutes(fastify) {
       let streamSid = null;
       let callSid = null;
       let elevenLabsWs = null;
+      let leadData = null;
 
       // Handle WebSocket errors
       ws.on('error', console.error);
@@ -109,19 +150,41 @@ export function registerOutboundRoutes(fastify) {
           elevenLabsWs.on("open", () => {
             console.log("[ElevenLabs] Connected to Conversational AI");
 
-            // Send initial configuration with prompt and first message
-            const initialConfig = {
-              type: "conversation_initiation_client_data",
-              conversation_config_override: {
-                agent: {
-                  prompt: { prompt: "you are a sophie from barts automite" },
-                  first_message: "hey Bart! how can I help you today?",
-                },
-              }
-            };
+            // Only proceed if we have lead data
+            if (leadData) {
+              // Format the first message based on lead data
+              let firstMessage = "Hello, I'm calling about the care services you inquired about. May I speak with you for a moment?";
 
-            // Send the configuration to ElevenLabs
-            elevenLabsWs.send(JSON.stringify(initialConfig));
+              // Create a properly formatted prompt for the ElevenLabs agent
+              let promptText = leadData.prompt || "";
+
+              // If no custom prompt exists, create one from the lead data
+              if (!promptText && leadData.PoC && leadData.CareNeededFor && leadData.CareReason) {
+                promptText = `Your name is Heather and you are a care coordinator calling to follow up about a care request. 
+                You are calling ${leadData.PoC} who submitted a request for ${leadData.CareNeededFor}. 
+                The care reason provided was: ${leadData.CareReason}
+                Your goal is to verify the details they submitted, show empathy, and confirm their interest in care services.
+                Be conversational, friendly, and professional. If they ask about next steps, let them know a care specialist will be in touch shortly to discuss care options and pricing.`;
+              }
+
+              // Send initial configuration with prompt and first message
+              const initialConfig = {
+                type: "conversation_initiation_client_data",
+                conversation_config_override: {
+                  agent: {
+                    prompt: { prompt: promptText },
+                    first_message: firstMessage,
+                  },
+                }
+              };
+
+              console.log("[ElevenLabs] Sending initial config with prompt for lead:", leadData.PoC || "Unknown");
+
+              // Send the configuration to ElevenLabs
+              elevenLabsWs.send(JSON.stringify(initialConfig));
+            } else {
+              console.error("[ElevenLabs] No lead data available for conversation initialization");
+            }
           });
 
           elevenLabsWs.on("message", (data) => {
@@ -211,6 +274,17 @@ export function registerOutboundRoutes(fastify) {
             case "start":
               streamSid = msg.start.streamSid;
               callSid = msg.start.callSid;
+
+              // Parse the lead data from the custom parameters
+              if (msg.start.customParameters && msg.start.customParameters.leadData) {
+                try {
+                  leadData = JSON.parse(msg.start.customParameters.leadData);
+                  console.log('[Twilio] Received lead data:', leadData);
+                } catch (e) {
+                  console.error('[Twilio] Error parsing lead data:', e);
+                }
+              }
+
               console.log(`[Twilio] Stream started - StreamSid: ${streamSid}, CallSid: ${callSid}`);
               break;
 

@@ -117,8 +117,8 @@ export function registerOutboundRoutes(fastify) {
               type: "conversation_initiation_client_data",
               conversation_config_override: {
                 agent: {
-                  prompt: { prompt: customParameters?.prompt || "you are a gary from the phone store" },
-                  first_message: "hey there! how can I help you today?",
+                  prompt: { prompt: customParameters?.prompt || "You are Heather from First Light Home Care, a friendly sales agent who is following up on an obtained lead" },
+                  first_message: "Hi, this is Heather from First Light Home Care, how are you doing today?",
                 },
               }
             };
