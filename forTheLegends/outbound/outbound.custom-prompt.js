@@ -199,23 +199,33 @@ export function registerOutboundRoutes(fastify) {
                 case "audio":
                   if (streamSid) {
                     if (message.audio?.chunk) {
-                      const audioData = {
-                        event: "media",
-                        streamSid,
-                        media: {
-                          payload: message.audio.chunk
-                        }
-                      };
-                      ws.send(JSON.stringify(audioData));
+                      // Skip audio data that contains "break time" messages
+                      const audioBase64 = message.audio.chunk;
+                      // Only send audio if it doesn't contain the "break time" markers
+                      if (!shouldSkipAudio(audioBase64)) {
+                        const audioData = {
+                          event: "media",
+                          streamSid,
+                          media: {
+                            payload: audioBase64
+                          }
+                        };
+                        ws.send(JSON.stringify(audioData));
+                      }
                     } else if (message.audio_event?.audio_base_64) {
-                      const audioData = {
-                        event: "media",
-                        streamSid,
-                        media: {
-                          payload: message.audio_event.audio_base_64
-                        }
-                      };
-                      ws.send(JSON.stringify(audioData));
+                      // Skip audio data that contains "break time" messages
+                      const audioBase64 = message.audio_event.audio_base_64;
+                      // Only send audio if it doesn't contain the "break time" markers
+                      if (!shouldSkipAudio(audioBase64)) {
+                        const audioData = {
+                          event: "media",
+                          streamSid,
+                          media: {
+                            payload: audioBase64
+                          }
+                        };
+                        ws.send(JSON.stringify(audioData));
+                      }
                     }
                   } else {
                     console.log("[ElevenLabs] Received audio but no StreamSid yet");
@@ -322,3 +332,22 @@ export function registerOutboundRoutes(fastify) {
     });
   });
 }
+
+// Add helper function to detect "break time" markers
+const shouldSkipAudio = (audioBase64) => {
+  try {
+    // Check if this is a system message like "break time"
+    // These are often very short audio clips with specific patterns
+    // You may need to adjust this logic based on your specific "break time" messages
+    const buffer = Buffer.from(audioBase64, 'base64');
+    // Very short audio segments (less than certain size) might be system messages
+    if (buffer.length < 1000) {
+      console.log("[ElevenLabs] Skipping potential system message audio chunk");
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.error("[ElevenLabs] Error checking audio content:", e);
+    return false;
+  }
+};
