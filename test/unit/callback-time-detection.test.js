@@ -6,16 +6,15 @@ import '../setup.js';
 jest.mock('ws');
 jest.mock('twilio');
 
+// Import the outbound-calls.js module directly to access its functions
+import * as outboundCallsModule from '../../outbound-calls.js';
+
 describe('Callback Time Detection', () => {
   let detectCallbackTime;
   
   beforeEach(() => {
     // Reset environment
     jest.resetModules();
-    
-    // Extract the detectCallbackTime function from the module
-    // We need to use a workaround to access this non-exported function
-    const outboundCallsModule = require('../../outbound-calls.js');
     
     // Define the function just as in the original file
     // This is needed because the function isn't exported, so we recreate it for testing

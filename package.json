@@ -20,11 +20,14 @@
     "@fastify/websocket": "^11.0.1",
     "@types/node": "^18.0.6",
     "axios": "^1.7.9",
+    "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "elevenlabs": "^0.18.1",
+    "express": "^4.21.2",
     "fastify": "^5.1.0",
     "node-fetch": "^3.3.2",
     "twilio": "^5.3.7",
+    "uuid": "^11.1.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

@@ -583,8 +583,22 @@ export function registerOutboundRoutes(fastify) {
               // If we already know this is a voicemail (detected by AMD earlier), 
               // add voicemail handling instructions
               if (callSid && callStatuses[callSid]?.isVoicemail) {
-                fullPrompt += `\n\nIMPORTANT: This call has reached a voicemail. Wait for the beep, then leave a brief message explaining who you are, why you're calling about home care services, and leave a callback number. Be concise as voicemails often have time limits.`;
-                console.log(`[ElevenLabs] Adding voicemail instructions for call ${callSid}`);
+                // Personalize voicemail message using any available lead data
+                const leadName = customParameters?.leadName || callStatuses[callSid]?.leadInfo?.LeadName || "";
+                const careNeededFor = customParameters?.careNeededFor || callStatuses[callSid]?.leadInfo?.CareNeededFor || "a loved one";
+                const careReason = customParameters?.careReason || callStatuses[callSid]?.leadInfo?.CareReason || "home care services";
+                
+                // Create personalized voicemail instruction
+                fullPrompt += `\n\nIMPORTANT: This call has reached a voicemail. Wait for the beep, then leave a personalized message like: "Hello ${leadName ? leadName + ", " : ""}I'm calling from First Light Home Care regarding the care services inquiry ${careNeededFor ? "for " + careNeededFor : ""} ${careReason ? "who needs " + careReason : ""}. Please call us back at (555) 123-4567 at your earliest convenience to discuss how we can help. Thank you."`;
+                
+                if (!leadName && !careNeededFor && !careReason) {
+                  // Fallback to more generic message if no personalization data is available
+                  fullPrompt += "\n\nKeep the message concise but warm and professional. Focus on urgency without being pushy.";
+                } else {
+                  fullPrompt += "\n\nEnsure the message sounds natural and conversational, not like a template. Be concise as voicemails often have time limits.";
+                }
+                
+                console.log(`[ElevenLabs] Adding personalized voicemail instructions for call ${callSid}`);
               }
 
               // Set up the conversation with wait_for_user_speech set to true
@@ -777,10 +791,36 @@ export function registerOutboundRoutes(fastify) {
                       console.log(`[ElevenLabs] Potential voicemail detected from transcript for call ${callSid}: "${transcript}"`);
                       callStatuses[callSid].isVoicemail = true;
                       
+                      // Personalize voicemail message using any available lead data
+                      let leadName = "";
+                      let careNeededFor = "";
+                      let careReason = "";
+                      
+                      // Try to get data from customParameters first, then from callStatuses
+                      if (customParameters) {
+                        leadName = customParameters.leadName || "";
+                        careNeededFor = customParameters.careNeededFor || "";
+                        careReason = customParameters.careReason || "";
+                      } else if (callStatuses[callSid]?.leadInfo) {
+                        leadName = callStatuses[callSid].leadInfo.LeadName || "";
+                        careNeededFor = callStatuses[callSid].leadInfo.CareNeededFor || "a loved one";
+                        careReason = callStatuses[callSid].leadInfo.CareReason || "";
+                      }
+                      
+                      // Create personalized voicemail instruction
+                      let voicemailInstructionText = "This call has reached a voicemail.";
+                      
+                      if (leadName || careNeededFor || careReason) {
+                        voicemailInstructionText += ` Leave a personalized message like: "Hello ${leadName ? leadName + ", " : ""}I'm calling from First Light Home Care regarding the care services inquiry ${careNeededFor ? "for " + careNeededFor : ""} ${careReason ? "who needs " + careReason : ""}. Please call us back at (555) 123-4567 at your earliest convenience to discuss how we can help. Thank you."`;
+                        voicemailInstructionText += " Ensure the message sounds natural and conversational, not like a template.";
+                      } else {
+                        voicemailInstructionText += " Wait for the beep, then leave a brief message explaining who you are and why you're calling about home care services. Be concise as voicemails often have time limits.";
+                      }
+                                        
                       // Send instruction to ElevenLabs about voicemail detection
                       const voicemailInstruction = {
                         type: "custom_instruction",
-                        instruction: "This call has reached a voicemail. Wait for the beep, then leave a brief message explaining who you are and why you're calling. Be concise as voicemails often have time limits."
+                        instruction: voicemailInstructionText
                       };
                       elevenLabsWs.send(JSON.stringify(voicemailInstruction));
                       

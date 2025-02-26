@@ -1,16 +1,25 @@
 // test/setup.js
 import { jest } from '@jest/globals';
+import { 
+  setupEnvironmentVariables,
+  setupCommonMocks,
+  setupModuleCompatibility
+} from './common-setup.js';
 
-// Mock environment variables
-process.env.ELEVENLABS_API_KEY = 'test-elevenlabs-api-key';
-process.env.ELEVENLABS_AGENT_ID = 'test-elevenlabs-agent-id';
-process.env.TWILIO_ACCOUNT_SID = 'test-twilio-account-sid';
-process.env.TWILIO_AUTH_TOKEN = 'test-twilio-auth-token';
-process.env.TWILIO_PHONE_NUMBER = '+18001234567';
-process.env.SALES_TEAM_PHONE_NUMBER = '+18009876543';
+// Set up environment variables with proper format (Twilio SID must start with 'AC')
+setupEnvironmentVariables();
+
+// Add any additional environment variables needed
 process.env.PORT = '8001';
 
-// Global mock for fetch to prevent actual API calls
+// Set up common mocks
+setupCommonMocks(jest);
+
+// Handle module compatibility between ESM and CommonJS
+setupModuleCompatibility();
+
+// Additional mock for fetch to prevent actual API calls during tests
+// This overrides the one in setupCommonMocks if needed
 global.fetch = jest.fn(() => 
   Promise.resolve({
     ok: true,
@@ -25,6 +34,7 @@ global.console = {
   log: jest.fn(),
   info: jest.fn(),
   error: jest.fn(),
+  warn: jest.fn(), // Make sure warn is also mocked
 };
 
 // Clean up mocks after each test
