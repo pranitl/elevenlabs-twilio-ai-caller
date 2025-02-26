@@ -6,6 +6,7 @@ import fastifyStatic from "@fastify/static";
 import path from "path";
 import { fileURLToPath } from 'url';
 import { registerOutboundRoutes } from './outbound-calls.js';
+import { registerInboundRoutes } from './inbound-calls.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -36,6 +37,7 @@ const start = async () => {
   try {
     // Register route handlers
     await registerOutboundRoutes(fastify);
+    await registerInboundRoutes(fastify);
 
     // Start listening
     await fastify.listen({ port: PORT, host: '0.0.0.0' });
