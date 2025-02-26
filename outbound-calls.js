@@ -375,39 +375,65 @@ export function registerOutboundRoutes(fastify) {
         // Create a unique conference room name based on the call SID
         const conferenceRoom = `ConferenceRoom_${salesCallSid}`;
         
-        // Update lead call to join the conference
+        // Store conference information for monitoring
+        if (!callStatuses[leadCallSid].conference) {
+          callStatuses[leadCallSid].conference = {
+            room: conferenceRoom,
+            leadJoined: false,
+            salesJoined: false,
+            transferStartTime: Date.now()
+          };
+        }
+        
+        // Build the callback URL for conference status events
+        const statusCallbackUrl = `${process.env.BASE_URL || `http://${process.env.REPL_SLUG}.repl.co`}/conference-status`;
+        
+        // Update lead call to join the conference with status callbacks
         try {
           await twilioClient.calls(leadCallSid).update({
             twiml: `<?xml version="1.0" encoding="UTF-8"?>
               <Response>
                 <Dial>
-                  <Conference waitUrl="https://twimlets.com/holdmusic?Bucket=com.twilio.music.classical" beep="false">
+                  <Conference 
+                    waitUrl="https://twimlets.com/holdmusic?Bucket=com.twilio.music.classical" 
+                    beep="false"
+                    statusCallback="${statusCallbackUrl}"
+                    statusCallbackEvent="join leave"
+                    statusCallbackMethod="POST">
                     ${conferenceRoom}
                   </Conference>
                 </Dial>
               </Response>`
           });
           
-          console.log(`Updated lead call ${leadCallSid} to join conference`);
+          console.log(`Updated lead call ${leadCallSid} to join conference with status monitoring`);
           
-          // Update sales call to join the same conference
+          // Update sales call to join the same conference with status callbacks
           await twilioClient.calls(salesCallSid).update({
             twiml: `<?xml version="1.0" encoding="UTF-8"?>
               <Response>
                 <Say>Transferring you to the call now.</Say>
                 <Dial>
-                  <Conference waitUrl="https://twimlets.com/holdmusic?Bucket=com.twilio.music.classical" beep="false">
+                  <Conference 
+                    waitUrl="https://twimlets.com/holdmusic?Bucket=com.twilio.music.classical" 
+                    beep="false"
+                    statusCallback="${statusCallbackUrl}"
+                    statusCallbackEvent="join leave"
+                    statusCallbackMethod="POST">
                     ${conferenceRoom}
                   </Conference>
                 </Dial>
               </Response>`
           });
           
-          console.log(`Updated sales call ${salesCallSid} to join conference`);
+          console.log(`Updated sales call ${salesCallSid} to join conference with status monitoring`);
           
-          // Mark the transfer as complete to signal that ElevenLabs connection can be closed
-          callStatuses[leadCallSid].transferComplete = true;
-          callStatuses[salesCallSid].transferComplete = true;
+          // Start monitoring the conference for successful connection
+          setTimeout(() => checkConferenceConnection(leadCallSid, salesCallSid, conferenceRoom), 15000);
+          
+          // Mark the transfer as initiated
+          callStatuses[leadCallSid].transferInitiated = true;
+          callStatuses[salesCallSid].transferInitiated = true;
         } catch (error) {
           console.error(`Failed to update calls for transfer:`, error);
         }
@@ -1094,6 +1120,139 @@ export function registerOutboundRoutes(fastify) {
       await checkAndTransfer(callSid);
     } catch (error) {
       console.error(`Error in transfer after intent detection: ${error}`);
+    }
+  }
+
+  // Route to handle conference status callbacks
+  fastify.post("/conference-status", async (request, reply) => {
+    const params = request.body;
+    const conferenceSid = params.ConferenceSid;
+    const conferenceStatus = params.StatusCallbackEvent;
+    const callSid = params.CallSid;
+    
+    console.log(`[Conference ${conferenceSid}] Status update: ${conferenceStatus} for call ${callSid}`);
+    
+    // Find which call this is (lead or sales) by checking all active calls
+    let leadCallSid = null;
+    let salesCallSid = null;
+    
+    Object.keys(callStatuses).forEach(sid => {
+      if (callStatuses[sid].conference?.room === params.FriendlyName) {
+        if (sid === callSid) {
+          // This is the lead call
+          leadCallSid = sid;
+          if (conferenceStatus === 'participant-join') {
+            callStatuses[sid].conference.leadJoined = true;
+            console.log(`[Conference] Lead ${sid} joined the conference`);
+          } else if (conferenceStatus === 'participant-leave') {
+            callStatuses[sid].conference.leadJoined = false;
+            console.log(`[Conference] Lead ${sid} left the conference`);
+          }
+        } else if (callStatuses[sid].salesCallSid === callSid) {
+          // This is the sales call
+          salesCallSid = sid;
+          if (conferenceStatus === 'participant-join') {
+            callStatuses[sid].conference.salesJoined = true;
+            console.log(`[Conference] Sales ${callStatuses[sid].salesCallSid} joined the conference`);
+          } else if (conferenceStatus === 'participant-leave') {
+            callStatuses[sid].conference.salesJoined = false;
+            console.log(`[Conference] Sales ${callStatuses[sid].salesCallSid} left the conference`);
+          }
+        }
+        
+        // If both parties have joined, mark transfer as complete
+        if (callStatuses[sid].conference.leadJoined && callStatuses[sid].conference.salesJoined) {
+          console.log(`[Conference] Both parties joined the conference - transfer successful!`);
+          callStatuses[sid].transferComplete = true;
+          if (callStatuses[sid].salesCallSid) {
+            callStatuses[callStatuses[sid].salesCallSid].transferComplete = true;
+          }
+        }
+      }
+    });
+    
+    // Return a 200 response to Twilio
+    reply.status(200).send({ success: true });
+  });
+  
+  // Function to check if both parties successfully connected to the conference
+  async function checkConferenceConnection(leadCallSid, salesCallSid, conferenceRoom) {
+    if (!callStatuses[leadCallSid] || !callStatuses[leadCallSid].conference) {
+      console.log(`[Conference] No conference data found for lead ${leadCallSid}`);
+      return;
+    }
+    
+    const conferenceData = callStatuses[leadCallSid].conference;
+    const transferStartTime = conferenceData.transferStartTime;
+    const currentTime = Date.now();
+    const transferDuration = (currentTime - transferStartTime) / 1000; // in seconds
+    
+    console.log(`[Conference] Checking conference connection after ${transferDuration.toFixed(1)} seconds`);
+    console.log(`[Conference] Status: Lead joined: ${conferenceData.leadJoined}, Sales joined: ${conferenceData.salesJoined}`);
+    
+    // If both parties joined, transfer is successful
+    if (conferenceData.leadJoined && conferenceData.salesJoined) {
+      console.log(`[Conference] Transfer successful! Both parties connected.`);
+      callStatuses[leadCallSid].transferComplete = true;
+      callStatuses[salesCallSid].transferComplete = true;
+      return;
+    }
+    
+    // If transfer has been pending for over 30 seconds and both parties haven't joined,
+    // consider it a failed transfer and implement fallback
+    if (transferDuration > 30 && (!conferenceData.leadJoined || !conferenceData.salesJoined)) {
+      console.log(`[Conference] Transfer failed! Implementing fallback. Lead joined: ${conferenceData.leadJoined}, Sales joined: ${conferenceData.salesJoined}`);
+      
+      try {
+        // Determine which party failed to join
+        if (!conferenceData.leadJoined) {
+          console.log(`[Conference] Lead failed to join conference. Reconnecting with AI.`);
+          
+          // End the sales call with an explanation
+          if (conferenceData.salesJoined) {
+            await twilioClient.calls(salesCallSid).update({
+              twiml: `<?xml version="1.0" encoding="UTF-8"?>
+                <Response>
+                  <Say>We apologize, but the customer appears to have disconnected. The AI will follow up with them later.</Say>
+                  <Hangup/>
+                </Response>`
+            });
+          }
+          
+          // Mark for follow-up
+          callStatuses[leadCallSid].needsFollowUp = true;
+          
+        } else if (!conferenceData.salesJoined) {
+          console.log(`[Conference] Sales team failed to join conference. Reconnecting lead with AI.`);
+          
+          // Reconnect the lead with the AI
+          await twilioClient.calls(leadCallSid).update({
+            twiml: `<?xml version="1.0" encoding="UTF-8"?>
+              <Response>
+                <Say>We apologize, but we're having trouble connecting you with our team. Let me help you instead.</Say>
+                <Connect>
+                  <Stream url="wss://${process.env.REPL_SLUG}.repl.co/elevenlabs-stream">
+                    <Parameter name="callSid" value="${leadCallSid}"/>
+                    <Parameter name="transferFailed" value="true"/>
+                  </Stream>
+                </Connect>
+              </Response>`
+          });
+          
+          // Reset the websocket connection for the lead
+          setupElevenLabsWebSocket(leadCallSid, true);
+        }
+        
+        // Mark transfer as failed
+        callStatuses[leadCallSid].transferFailed = true;
+        callStatuses[salesCallSid].transferFailed = true;
+        
+      } catch (error) {
+        console.error(`[Conference] Error implementing fallback for failed transfer:`, error);
+      }
+    } else if (transferDuration <= 30) {
+      // Check again in 10 seconds if we're still within the 30-second window
+      setTimeout(() => checkConferenceConnection(leadCallSid, salesCallSid, conferenceRoom), 10000);
     }
   }
 }
