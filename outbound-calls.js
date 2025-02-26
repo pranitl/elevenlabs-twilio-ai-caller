@@ -1,5 +1,30 @@
 import WebSocket from "ws";
 import Twilio from "twilio";
+import express from "express";
+import bodyParser from "body-parser";
+import cors from "cors";
+import { v4 as uuidv4 } from "uuid";
+import twilio from "twilio";
+import dotenv from "dotenv";
+
+// Import intent detection functionality from existing file
+import {
+  initializeIntentDetection,
+  processTranscript,
+  getIntentInstructions,
+  hasSchedulingIntent,
+  hasNegativeIntent,
+  getIntentData
+} from './forTheLegends/outbound/intent-detector.js';
+
+// Import retry manager for callback scheduling
+import {
+  initialize as initRetryManager,
+  trackCall,
+  scheduleRetryCall
+} from './forTheLegends/outbound/retry-manager.js';
+
+dotenv.config();
 
 // Store call statuses
 const callStatuses = {};
@@ -56,6 +81,11 @@ export function registerOutboundRoutes(fastify) {
   // Add a route to serve the handoff.mp3 file directly
   fastify.get('/audio/handoff.mp3', (request, reply) => {
     reply.sendFile('handoff.mp3');
+  });
+
+  // Initialize retry manager
+  initRetryManager({
+    makeWebhookUrl: process.env.MAKE_WEBHOOK_URL
   });
 
   async function getSignedUrl() {
@@ -331,52 +361,115 @@ export function registerOutboundRoutes(fastify) {
       return;
     }
     
-    // Regular transfer logic for human answers
+    // Enhanced transfer logic that considers lead intent
     if (leadStatus === "in-progress" && salesStatus === "in-progress" && !isVoicemail) {
-      console.log(`Both parties are ready and it's not a voicemail. Initiating transfer for ${leadCallSid}`);
+      // Get intent data if it exists
+      const intentData = callStatuses[leadCallSid]?.intentData;
+      const transferReady = evaluateTransferReadiness(leadCallSid);
       
-      // Create a unique conference room name based on the call SID
-      const conferenceRoom = `ConferenceRoom_${salesCallSid}`;
+      console.log(`Evaluating transfer readiness for ${leadCallSid}: ${transferReady ? 'READY' : 'NOT READY'}`);
       
-      // Update lead call to join the conference
-      try {
-        await twilioClient.calls(leadCallSid).update({
-          twiml: `<?xml version="1.0" encoding="UTF-8"?>
-            <Response>
-              <Dial>
-                <Conference waitUrl="https://twimlets.com/holdmusic?Bucket=com.twilio.music.classical" beep="false">
-                  ${conferenceRoom}
-                </Conference>
-              </Dial>
-            </Response>`
-        });
+      if (transferReady) {
+        console.log(`Intent-based transfer conditions met for ${leadCallSid}. Initiating transfer.`);
         
-        console.log(`Updated lead call ${leadCallSid} to join conference`);
+        // Create a unique conference room name based on the call SID
+        const conferenceRoom = `ConferenceRoom_${salesCallSid}`;
         
-        // Update sales call to join the same conference
-        await twilioClient.calls(salesCallSid).update({
-          twiml: `<?xml version="1.0" encoding="UTF-8"?>
-            <Response>
-              <Say>Transferring you to the call now.</Say>
-              <Dial>
-                <Conference waitUrl="https://twimlets.com/holdmusic?Bucket=com.twilio.music.classical" beep="false">
-                  ${conferenceRoom}
-                </Conference>
-              </Dial>
-            </Response>`
-        });
-        
-        console.log(`Updated sales call ${salesCallSid} to join conference`);
-        
-        // Mark the transfer as complete to signal that ElevenLabs connection can be closed
-        callStatuses[leadCallSid].transferComplete = true;
-        callStatuses[salesCallSid].transferComplete = true;
-      } catch (error) {
-        console.error(`Failed to update calls for transfer:`, error);
+        // Update lead call to join the conference
+        try {
+          await twilioClient.calls(leadCallSid).update({
+            twiml: `<?xml version="1.0" encoding="UTF-8"?>
+              <Response>
+                <Dial>
+                  <Conference waitUrl="https://twimlets.com/holdmusic?Bucket=com.twilio.music.classical" beep="false">
+                    ${conferenceRoom}
+                  </Conference>
+                </Dial>
+              </Response>`
+          });
+          
+          console.log(`Updated lead call ${leadCallSid} to join conference`);
+          
+          // Update sales call to join the same conference
+          await twilioClient.calls(salesCallSid).update({
+            twiml: `<?xml version="1.0" encoding="UTF-8"?>
+              <Response>
+                <Say>Transferring you to the call now.</Say>
+                <Dial>
+                  <Conference waitUrl="https://twimlets.com/holdmusic?Bucket=com.twilio.music.classical" beep="false">
+                    ${conferenceRoom}
+                  </Conference>
+                </Dial>
+              </Response>`
+          });
+          
+          console.log(`Updated sales call ${salesCallSid} to join conference`);
+          
+          // Mark the transfer as complete to signal that ElevenLabs connection can be closed
+          callStatuses[leadCallSid].transferComplete = true;
+          callStatuses[salesCallSid].transferComplete = true;
+        } catch (error) {
+          console.error(`Failed to update calls for transfer:`, error);
+        }
+      } else {
+        console.log(`Transfer not initiated: intent-based conditions not met for ${leadCallSid}`);
       }
     } else {
       console.log(`Transfer conditions not met: lead=${leadStatus}, sales=${salesStatus}, isVoicemail=${isVoicemail}`);
     }
+  }
+
+  // Evaluate if lead is ready for transfer based on intent and conversation
+  function evaluateTransferReadiness(leadCallSid) {
+    if (!callStatuses[leadCallSid]) {
+      return false;
+    }
+    
+    // Get transcripts and intent data
+    const transcripts = callStatuses[leadCallSid].transcripts || [];
+    const intentData = callStatuses[leadCallSid].intentData;
+    
+    // Default: not ready for transfer
+    let transferReady = false;
+    
+    // Check for positive intent indicators in intent data
+    if (intentData?.primaryIntent) {
+      const positiveIntents = [
+        'needs_more_info',
+        'needs_immediate_care'
+      ];
+      
+      if (positiveIntents.includes(intentData.primaryIntent.name)) {
+        console.log(`Positive intent detected: ${intentData.primaryIntent.name}`);
+        transferReady = true;
+      }
+    }
+    
+    // Check for keywords in transcripts
+    const positiveKeywords = [
+      'interested', 'want to know more', 'tell me more', 
+      'speak to someone', 'speak to a person', 'talk to a representative',
+      'sounds good', 'that would be helpful', 'need help', 'right away',
+      'looking for assistance', 'need care'
+    ];
+    
+    // Check last 3 transcripts from lead for positive keywords
+    const leadTranscripts = transcripts
+      .filter(t => t.speaker === 'user')
+      .slice(-3)
+      .map(t => t.text.toLowerCase());
+    
+    for (const transcript of leadTranscripts) {
+      for (const keyword of positiveKeywords) {
+        if (transcript.includes(keyword.toLowerCase())) {
+          console.log(`Positive keyword detected: "${keyword}" in "${transcript}"`);
+          transferReady = true;
+          break;
+        }
+      }
+    }
+    
+    return transferReady;
   }
 
   // TwiML for handoff
@@ -534,43 +627,151 @@ export function registerOutboundRoutes(fastify) {
                       callStatuses[callSid].transcripts = [];
                     }
                     
+                    const speaker = message.transcript_event.speaker === "agent" ? "ai" : "user";
+                    const transcriptText = message.transcript_event.text;
+                    
                     callStatuses[callSid].transcripts.push({
-                      speaker: message.transcript_event.speaker || "unknown",
-                      text: message.transcript_event.text
+                      speaker: speaker,
+                      text: transcriptText
                     });
-                  }
-                  
-                  // Check transcript for voicemail indicators
-                  const transcript = message.transcript_event.text.toLowerCase();
-                  if ((transcript.includes("leave a message") || 
-                       transcript.includes("not available") || 
-                       transcript.includes("after the tone") || 
-                       transcript.includes("after the beep")) && 
-                      callSid && !callStatuses[callSid]?.isVoicemail) {
                     
-                    console.log(`[ElevenLabs] Potential voicemail detected from transcript for call ${callSid}: "${transcript}"`);
-                    callStatuses[callSid].isVoicemail = true;
-                    
-                    // Send instruction to ElevenLabs about voicemail detection
-                    const voicemailInstruction = {
-                      type: "custom_instruction",
-                      instruction: "This call has reached a voicemail. Wait for the beep, then leave a brief message explaining who you are and why you're calling. Be concise as voicemails often have time limits."
-                    };
-                    elevenLabsWs.send(JSON.stringify(voicemailInstruction));
-                    
-                    // Notify sales team if they're on the call
-                    const salesCallSid = callStatuses[callSid]?.salesCallSid;
-                    if (salesCallSid && callStatuses[salesCallSid]?.salesStatus === "in-progress") {
+                    // Process transcript for intent detection
+                    if (speaker === "user" && transcriptText) {
                       try {
-                        twilioClient.calls(salesCallSid).update({
-                          twiml: `<?xml version="1.0" encoding="UTF-8"?>
-                            <Response>
-                              <Say>The AI is now leaving a voicemail. Please wait until transfer is complete.</Say>
-                              <Pause length="2"/>
-                            </Response>`
-                        });
+                        // Initialize intent detection if not already done
+                        if (!callStatuses[callSid].intentInitialized) {
+                          initializeIntentDetection(callSid);
+                          callStatuses[callSid].intentInitialized = true;
+                        }
+                        
+                        // Analyze the transcript for intent
+                        const intentResult = processTranscript(callSid, transcriptText, 'lead');
+                        
+                        // Store the updated intent data
+                        callStatuses[callSid].intentData = getIntentData(callSid);
+                        
+                        console.log(`Intent analysis for ${callSid}: ${JSON.stringify(intentResult)}`);
+                        
+                        // Check if we have a schedule callback intent
+                        const hasCallbackIntent = intentResult.intentDetected && 
+                                                 intentResult.detectedIntents.includes('schedule_callback');
+                        
+                        // Check for callback scheduling for either:
+                        // 1. When sales team is unavailable 
+                        // 2. When the user explicitly requests a callback (schedule_callback intent)
+                        if (callStatuses[callSid]?.salesTeamUnavailable || hasCallbackIntent) {
+                          // Detect if the transcript contains time references for callbacks
+                          const callbackTimeInfo = detectCallbackTime(transcriptText);
+                          
+                          if (callbackTimeInfo) {
+                            console.log(`Detected callback time references in transcript for call ${callSid}:`, callbackTimeInfo);
+                            
+                            // Store in call status for webhook processing
+                            if (!callStatuses[callSid].callbackPreferences) {
+                              callStatuses[callSid].callbackPreferences = [];
+                            }
+                            
+                            callStatuses[callSid].callbackPreferences.push({
+                              ...callbackTimeInfo,
+                              fromIntent: hasCallbackIntent,
+                              salesUnavailable: !!callStatuses[callSid]?.salesTeamUnavailable,
+                              detectedAt: new Date().toISOString()
+                            });
+                            
+                            // Track this as a potential callback in the retry manager
+                            if (!callStatuses[callSid].callbackScheduled) {
+                              const leadId = callStatuses[callSid].leadInfo?.LeadId || callSid;
+                              const phoneNumber = callStatuses[callSid].leadInfo?.PhoneNumber;
+                              
+                              // Initialize tracking in retry manager
+                              trackCall(leadId, callSid, {
+                                phoneNumber,
+                                ...callStatuses[callSid].leadInfo,
+                                callbackTimeInfo,
+                                fromIntent: hasCallbackIntent
+                              });
+                              
+                              callStatuses[callSid].callbackScheduled = true;
+                              
+                              // If the user explicitly requested a callback but sales team is available,
+                              // send an instruction to the AI to confirm the callback schedule
+                              if (hasCallbackIntent && !callStatuses[callSid]?.salesTeamUnavailable && 
+                                  elevenLabsWs?.readyState === WebSocket.OPEN) {
+                                
+                                const confirmCallbackInstruction = {
+                                  type: "custom_instruction",
+                                  instruction: "The caller has requested to schedule a callback instead of speaking now. Confirm the specific day and time they prefer for the callback. Also verify their phone number and ask if there's any additional information our team should know before calling them back. Before ending the call, summarize the callback time and their contact information."
+                                };
+                                
+                                elevenLabsWs.send(JSON.stringify(confirmCallbackInstruction));
+                              }
+                            }
+                          } else if (hasCallbackIntent) {
+                            // If we detected a callback intent but no specific time, prompt for a time
+                            if (elevenLabsWs?.readyState === WebSocket.OPEN) {
+                              const askForTimeInstruction = {
+                                type: "custom_instruction",
+                                instruction: "The caller seems to want a callback, but hasn't specified a time. Ask them specifically when would be a good time to call them back, asking for a day and time that works best for them."
+                              };
+                              
+                              elevenLabsWs.send(JSON.stringify(askForTimeInstruction));
+                            }
+                          }
+                        }
+                        
+                        // Get intent-based instructions for the AI
+                        const instructions = getIntentInstructions(callSid);
+                        if (instructions) {
+                          console.log(`Sending intent-based instructions to ElevenLabs: ${instructions}`);
+                          const instructionMessage = {
+                            type: "custom_instruction",
+                            instruction: instructions
+                          };
+                          if (elevenLabsWs?.readyState === WebSocket.OPEN) {
+                            elevenLabsWs.send(JSON.stringify(instructionMessage));
+                          }
+                        }
+                        
+                        // Check if we should transfer based on updated intent
+                        if (callSid && callStatuses[callSid].salesCallSid) {
+                          checkTransferAfterIntent(callSid);
+                        }
                       } catch (error) {
-                        console.error(`[ElevenLabs] Failed to update sales call ${salesCallSid}:`, error);
+                        console.error(`Error processing transcript for intent: ${error}`);
+                      }
+                    }
+                    
+                    // Check transcript for voicemail indicators
+                    const transcript = message.transcript_event.text.toLowerCase();
+                    if ((transcript.includes("leave a message") || 
+                        transcript.includes("not available") || 
+                        transcript.includes("after the tone") || 
+                        transcript.includes("after the beep")) && 
+                        callSid && !callStatuses[callSid]?.isVoicemail) {
+                      console.log(`[ElevenLabs] Potential voicemail detected from transcript for call ${callSid}: "${transcript}"`);
+                      callStatuses[callSid].isVoicemail = true;
+                      
+                      // Send instruction to ElevenLabs about voicemail detection
+                      const voicemailInstruction = {
+                        type: "custom_instruction",
+                        instruction: "This call has reached a voicemail. Wait for the beep, then leave a brief message explaining who you are and why you're calling. Be concise as voicemails often have time limits."
+                      };
+                      elevenLabsWs.send(JSON.stringify(voicemailInstruction));
+                      
+                      // Notify sales team if they're on the call
+                      const salesCallSid = callStatuses[callSid]?.salesCallSid;
+                      if (salesCallSid && callStatuses[salesCallSid]?.salesStatus === "in-progress") {
+                        try {
+                          twilioClient.calls(salesCallSid).update({
+                            twiml: `<?xml version="1.0" encoding="UTF-8"?>
+                              <Response>
+                                <Say>The AI is now leaving a voicemail. Please wait until transfer is complete.</Say>
+                                <Pause length="2"/>
+                              </Response>`
+                          });
+                        } catch (error) {
+                          console.error(`[ElevenLabs] Failed to update sales call ${salesCallSid}:`, error);
+                        }
                       }
                     }
                   }
@@ -650,10 +851,10 @@ export function registerOutboundRoutes(fastify) {
                   
                   console.log(`[Twilio] Informing AI that sales team is unavailable for call ${callSid}`);
                   
-                  // Send instruction to ElevenLabs to verify contact info and handle the call
+                  // Enhanced instruction explicitly prompting for callback scheduling
                   const unavailableInstruction = {
                     type: "custom_instruction",
-                    instruction: "I need to inform the caller that right now our care specialists are not available to join this call. Clearly state that no one is available at this moment but our team will contact them soon. Verify their contact information including phone number and email, specifically confirming that it matches what they previously submitted in their inquiry. Ask if there's a preferred time for our team to follow up. Be sure to confirm all their information is correct before ending the call."
+                    instruction: "I need to inform the caller that our care specialists are not available right now. Tell them: 'I'm sorry, but our care specialists are currently unavailable to join our call. However, I can schedule a callback for you at a time that works best for you.' Then ask specifically: 'When would be a good time for our team to call you back?' Wait for their response and confirm the specific day and time they prefer. Also verify their contact information (phone number and email) to ensure we have the correct details. Before ending the call, summarize the callback time and their contact information to confirm everything is correct."
                   };
                   elevenLabsWs.send(JSON.stringify(unavailableInstruction));
                   
@@ -695,6 +896,69 @@ export function registerOutboundRoutes(fastify) {
     );
   });
   
+  // Date/time pattern matchers for callback scheduling
+  const dateTimePatterns = {
+    // Days of the week
+    daysOfWeek: /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi,
+    // Times
+    times: /\b(([1-9]|1[0-2])(?::([0-5][0-9]))?\s*([ap]\.?m\.?)?)\b/gi,
+    // Relative terms
+    relativeDays: /\b(tomorrow|later today|this afternoon|this evening|next week)\b/gi,
+    // Generic time periods
+    timePeriods: /\b(morning|afternoon|evening|night)\b/gi
+  };
+
+  /**
+   * Detect potential callback time from transcript
+   * @param {string} transcript - The transcript text
+   * @returns {Object|null} Detected callback time information
+   */
+  function detectCallbackTime(transcript) {
+    if (!transcript) return null;
+    
+    const lowercaseText = transcript.toLowerCase();
+    const result = {
+      hasTimeReference: false,
+      rawText: transcript,
+      detectedDays: [],
+      detectedTimes: [],
+      detectedRelative: [],
+      detectedPeriods: []
+    };
+    
+    // Extract days of the week
+    const dayMatches = [...lowercaseText.matchAll(dateTimePatterns.daysOfWeek)];
+    if (dayMatches.length > 0) {
+      result.hasTimeReference = true;
+      result.detectedDays = dayMatches.map(match => match[0]);
+    }
+    
+    // Extract times
+    const timeMatches = [...lowercaseText.matchAll(dateTimePatterns.times)];
+    if (timeMatches.length > 0) {
+      result.hasTimeReference = true;
+      result.detectedTimes = timeMatches.map(match => match[0]);
+    }
+    
+    // Extract relative day references
+    const relativeMatches = [...lowercaseText.matchAll(dateTimePatterns.relativeDays)];
+    if (relativeMatches.length > 0) {
+      result.hasTimeReference = true;
+      result.detectedRelative = relativeMatches.map(match => match[0]);
+    }
+    
+    // Extract time periods
+    const periodMatches = [...lowercaseText.matchAll(dateTimePatterns.timePeriods)];
+    if (periodMatches.length > 0) {
+      result.hasTimeReference = true;
+      result.detectedPeriods = periodMatches.map(match => match[0]);
+    }
+    
+    if (!result.hasTimeReference) return null;
+    
+    return result;
+  }
+
   // Function to fetch conversation details from ElevenLabs and send to make.com webhook
   async function sendCallDataToWebhook(callSid, conversationId) {
     try {
@@ -774,8 +1038,30 @@ export function registerOutboundRoutes(fastify) {
         lead_info: callStatuses[callSid]?.leadInfo || {},
         transcript: transcriptData,
         summary: summaryData,
+        // Add callback preferences if they exist
+        callbackPreferences: callStatuses[callSid]?.callbackPreferences || [],
         timestamp: new Date().toISOString()
       };
+      
+      // Schedule callback if we have preferences and sales team was unavailable
+      if (callStatuses[callSid]?.salesTeamUnavailable && 
+          callStatuses[callSid]?.callbackPreferences?.length > 0 &&
+          !callStatuses[callSid]?.callbackSchedulingAttempted) {
+        
+        callStatuses[callSid].callbackSchedulingAttempted = true;
+        
+        const leadId = callStatuses[callSid].leadInfo?.LeadId || callSid;
+        try {
+          const scheduleResult = await scheduleRetryCall(leadId);
+          console.log(`[Webhook] Callback scheduling result for ${callSid}:`, scheduleResult);
+          webhookData.callbackScheduled = scheduleResult.success;
+          webhookData.callbackDetails = scheduleResult;
+        } catch (error) {
+          console.error(`[Webhook] Error scheduling callback for ${callSid}:`, error);
+          webhookData.callbackScheduled = false;
+          webhookData.callbackError = error.message;
+        }
+      }
       
       // Send data to make.com webhook
       console.log(`[Webhook] Sending data to make.com for call ${callSid}`);
@@ -799,6 +1085,15 @@ export function registerOutboundRoutes(fastify) {
       }
     } catch (error) {
       console.error(`[Webhook] Unexpected error: ${error.message}`);
+    }
+  }
+
+  // Helper function to check transfer after intent detection
+  async function checkTransferAfterIntent(callSid) {
+    try {
+      await checkAndTransfer(callSid);
+    } catch (error) {
+      console.error(`Error in transfer after intent detection: ${error}`);
     }
   }
 }

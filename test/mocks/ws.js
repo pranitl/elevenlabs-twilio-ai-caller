@@ -8,16 +8,24 @@ class MockWebSocket extends EventEmitter {
     super();
     this.url = url;
     this.readyState = 1; // WebSocket.OPEN
+    this.sentMessages = [];
+    this.closeWasCalled = false;
   }
 
   send(data) {
+    this.sentMessages.push(data);
     this.emit('send', data);
     return true;
   }
 
   close() {
+    this.closeWasCalled = true;
     this.readyState = 3; // WebSocket.CLOSED
     this.emit('close');
+  }
+  
+  getSentMessages() {
+    return this.sentMessages;
   }
 }
 
