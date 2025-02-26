@@ -1,50 +1,44 @@
 import WebSocket from "ws";
 import Twilio from "twilio";
-import path from "path";
-import { fileURLToPath } from 'url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Store call statuses
+const callStatuses = {};
 
 export function registerOutboundRoutes(fastify) {
-  // Check for required environment variables
-  const { 
-    ELEVENLABS_API_KEY, 
+  const {
+    ELEVENLABS_API_KEY,
     ELEVENLABS_AGENT_ID,
     TWILIO_ACCOUNT_SID,
     TWILIO_AUTH_TOKEN,
     TWILIO_PHONE_NUMBER,
-    SALES_TEAM_PHONE_NUMBER
+    SALES_TEAM_PHONE_NUMBER,
   } = process.env;
 
-  if (!ELEVENLABS_API_KEY || !ELEVENLABS_AGENT_ID || !TWILIO_ACCOUNT_SID || 
-      !TWILIO_AUTH_TOKEN || !TWILIO_PHONE_NUMBER) {
+  if (
+    !ELEVENLABS_API_KEY ||
+    !ELEVENLABS_AGENT_ID ||
+    !TWILIO_ACCOUNT_SID ||
+    !TWILIO_AUTH_TOKEN ||
+    !TWILIO_PHONE_NUMBER ||
+    !SALES_TEAM_PHONE_NUMBER
+  ) {
     console.error("Missing required environment variables");
     throw new Error("Missing required environment variables");
   }
 
-  // Initialize Twilio client
   const twilioClient = new Twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
-  
-  // Track active calls for bridging
-  const activeCalls = new Map();
 
-  // Helper function to get signed URL for authenticated conversations
   async function getSignedUrl() {
     try {
       const response = await fetch(
         `https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id=${ELEVENLABS_AGENT_ID}`,
         {
-          method: 'GET',
-          headers: {
-            'xi-api-key': ELEVENLABS_API_KEY
-          }
-        }
+          method: "GET",
+          headers: { "xi-api-key": ELEVENLABS_API_KEY },
+        },
       );
-
-      if (!response.ok) {
+      if (!response.ok)
         throw new Error(`Failed to get signed URL: ${response.statusText}`);
-      }
-
       const data = await response.json();
       return data.signed_url;
     } catch (error) {
@@ -53,414 +47,338 @@ export function registerOutboundRoutes(fastify) {
     }
   }
 
-  // Route to initiate outbound calls to both lead and sales
+  // Route to initiate outbound calls with sales team handoff
   fastify.post("/outbound-call-to-sales", async (request, reply) => {
+    const { number, prompt, leadinfo } = request.body;
+
+    if (!number)
+      return reply.code(400).send({ error: "Phone number is required" });
+
     try {
-      const leadData = request.body;
+      console.log("Initiating lead call to:", number);
+      console.log("Lead info:", JSON.stringify(leadinfo));
       
-      // Validate input
-      if (!leadData.number) {
-        return reply.code(400).send({ 
-          success: false, 
-          error: "Lead phone number is required" 
-        });
-      }
-
-      const leadPhoneNumber = leadData.number;
-      const salesPhoneNumber = SALES_TEAM_PHONE_NUMBER || leadData.salesNumber;
-      
-      if (!salesPhoneNumber) {
-        return reply.code(400).send({ 
-          success: false, 
-          error: "Sales team phone number is required in env vars or request" 
-        });
-      }
-
-      // Create a unique ID for this call flow
-      const flowId = `flow_${Date.now()}`;
-      
-      // Store call data
-      activeCalls.set(flowId, {
-        leadPhoneNumber,
-        salesPhoneNumber,
-        leadCallSid: null,
-        salesCallSid: null,
-        leadStatus: 'initiated',
-        salesStatus: 'initiated',
-        conferenceCreated: false
-      });
-
-      // First call the lead
-      console.log(`[Outbound] Initiating call to lead: ${leadPhoneNumber}`);
       const leadCall = await twilioClient.calls.create({
         from: TWILIO_PHONE_NUMBER,
-        to: leadPhoneNumber,
-        url: `https://${request.headers.host}/lead-call-handler?flowId=${flowId}`,
-        statusCallback: `https://${request.headers.host}/lead-status-callback?flowId=${flowId}`,
-        statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
-        statusCallbackMethod: 'POST'
-      });
-      
-      // Update lead call SID
-      const callData = activeCalls.get(flowId);
-      activeCalls.set(flowId, {
-        ...callData,
-        leadCallSid: leadCall.sid
+        to: number,
+        url: `https://${request.headers.host}/outbound-call-twiml?prompt=${encodeURIComponent(prompt || "")}&leadName=${encodeURIComponent(leadinfo?.LeadName || "")}&careReason=${encodeURIComponent(leadinfo?.CareReason || "")}&careNeededFor=${encodeURIComponent(leadinfo?.CareNeededFor || "")}`,
+        statusCallback: `https://${request.headers.host}/lead-status`,
+        statusCallbackEvent: ["initiated", "answered", "completed"],
       });
 
-      // Then call the sales team
-      console.log(`[Outbound] Initiating call to sales team: ${salesPhoneNumber}`);
       const salesCall = await twilioClient.calls.create({
         from: TWILIO_PHONE_NUMBER,
-        to: salesPhoneNumber,
-        url: `https://${request.headers.host}/sales-call-handler?flowId=${flowId}`,
-        statusCallback: `https://${request.headers.host}/sales-status-callback?flowId=${flowId}`,
-        statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
-        statusCallbackMethod: 'POST'
-      });
-      
-      // Update sales call SID
-      const updatedCallData = activeCalls.get(flowId);
-      activeCalls.set(flowId, {
-        ...updatedCallData,
-        salesCallSid: salesCall.sid
+        to: SALES_TEAM_PHONE_NUMBER,
+        url: `https://${request.headers.host}/sales-team-twiml?leadName=${encodeURIComponent(leadinfo?.LeadName || "")}&careReason=${encodeURIComponent(leadinfo?.CareReason || "")}&careNeededFor=${encodeURIComponent(leadinfo?.CareNeededFor || "")}`,
+        statusCallback: `https://${request.headers.host}/sales-status`,
+        statusCallbackEvent: ["initiated", "answered", "completed"],
       });
 
-      reply.send({ 
-        success: true, 
-        message: "Calls initiated", 
-        flowId,
+      callStatuses[leadCall.sid] = {
+        leadStatus: "initiated",
+        salesCallSid: salesCall.sid,
+      };
+      callStatuses[salesCall.sid] = {
+        salesStatus: "initiated",
         leadCallSid: leadCall.sid,
-        salesCallSid: salesCall.sid
+      };
+
+      console.log("Initiating sales call to:", SALES_TEAM_PHONE_NUMBER);
+      console.log("Lead call SID:", leadCall.sid);
+      console.log("Sales call SID:", salesCall.sid);
+
+      reply.send({
+        success: true,
+        message: "Calls initiated",
+        leadCallSid: leadCall.sid,
+        salesCallSid: salesCall.sid,
       });
     } catch (error) {
-      console.error("Error initiating outbound calls:", error);
-      reply.code(500).send({ 
-        success: false, 
-        error: "Failed to initiate calls" 
-      });
+      console.error("Error initiating calls:", error);
+      reply
+        .code(500)
+        .send({ success: false, error: "Failed to initiate calls" });
     }
   });
 
-  // Handle status callbacks for lead call
-  fastify.post("/lead-status-callback", async (request, reply) => {
-    const { flowId } = request.query;
-    const callStatus = request.body.CallStatus;
-    console.log(`[Outbound] Lead call status update: ${callStatus}, Flow ID: ${flowId}`);
-    
-    if (flowId && activeCalls.has(flowId)) {
-      const callData = activeCalls.get(flowId);
-      activeCalls.set(flowId, {
-        ...callData,
-        leadStatus: callStatus
-      });
+  // TwiML for lead's call (AI agent)
+  fastify.all("/outbound-call-twiml", async (request, reply) => {
+    const prompt = request.query.prompt || "";
+    const leadName = request.query.leadName || "";
+    const careReason = request.query.careReason || "";
+    const careNeededFor = request.query.careNeededFor || "";
 
-      // If lead hangs up, terminate the call flow
-      if (callStatus === 'completed' && callData.salesStatus !== 'in-progress') {
-        cleanupCallFlow(flowId);
-      }
-    }
-    
-    reply.send({ success: true });
-  });
-
-  // Handle status callbacks for sales call
-  fastify.post("/sales-status-callback", async (request, reply) => {
-    const { flowId } = request.query;
-    const callStatus = request.body.CallStatus;
-    console.log(`[Outbound] Sales call status update: ${callStatus}, Flow ID: ${flowId}`);
-    
-    if (flowId && activeCalls.has(flowId)) {
-      const callData = activeCalls.get(flowId);
-      activeCalls.set(flowId, {
-        ...callData,
-        salesStatus: callStatus
-      });
-      
-      // If both parties are connected, potentially bridge the calls
-      if (callStatus === 'in-progress' && callData.leadStatus === 'in-progress' && !callData.conferenceCreated) {
-        await bridgeCalls(flowId);
-      }
-
-      // If sales team hangs up, terminate the call flow
-      if (callStatus === 'completed') {
-        cleanupCallFlow(flowId);
-      }
-    }
-    
-    reply.send({ success: true });
-  });
-  
-  // Helper function to clean up call flow
-  function cleanupCallFlow(flowId) {
-    if (activeCalls.has(flowId)) {
-      console.log(`[Outbound] Cleaning up call flow: ${flowId}`);
-      activeCalls.delete(flowId);
-    }
-  }
-
-  // Helper function to bridge calls
-  async function bridgeCalls(flowId) {
-    if (!activeCalls.has(flowId)) return;
-    
-    const callData = activeCalls.get(flowId);
-    if (callData.conferenceCreated) return;
-    
-    try {
-      console.log(`[Outbound] Bridging calls for flow: ${flowId}`);
-      
-      // Create a conference for both parties
-      const conferenceName = `conf_${flowId}`;
-      
-      // Get the server address for the TwiML URLs
-      const serverAddress = fastify.server.address();
-      const hostname = serverAddress.address === '::' ? 'localhost' : serverAddress.address;
-      const baseUrl = `https://${request.headers.host || `${hostname}:${serverAddress.port}`}`;
-      
-      // Update lead call to join conference
-      await twilioClient.calls(callData.leadCallSid)
-        .update({
-          twiml: `<Response>
-                   <Play>${baseUrl}/handoff.mp3</Play>
-                   <Dial>
-                     <Conference>${conferenceName}</Conference>
-                   </Dial>
-                 </Response>`
-        });
-      
-      // Update sales call to join conference
-      await twilioClient.calls(callData.salesCallSid)
-        .update({
-          twiml: `<Response>
-                   <Dial>
-                     <Conference>${conferenceName}</Conference>
-                   </Dial>
-                 </Response>`
-        });
-      
-      // Mark as conference created
-      activeCalls.set(flowId, {
-        ...callData,
-        conferenceCreated: true
-      });
-      
-      console.log(`[Outbound] Successfully bridged calls for flow: ${flowId}`);
-    } catch (error) {
-      console.error(`[Outbound] Error bridging calls for flow ${flowId}:`, error);
-    }
-  }
-
-  // TwiML for lead call
-  fastify.all("/lead-call-handler", async (request, reply) => {
-    const { flowId } = request.query;
-    console.log(`[Outbound] Handling lead call for flow: ${flowId}`);
-    
-    // Connect to ElevenLabs for AI conversation while waiting for sales team
     const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
       <Response>
         <Connect>
-          <Stream url="wss://${request.headers.host}/lead-media-stream?flowId=${flowId}" />
+          <Stream url="wss://${request.headers.host}/outbound-media-stream">
+            <Parameter name="prompt" value="${prompt}" />
+            <Parameter name="leadName" value="${leadName}" />
+            <Parameter name="careReason" value="${careReason}" />
+            <Parameter name="careNeededFor" value="${careNeededFor}" />
+          </Stream>
         </Connect>
       </Response>`;
-
     reply.type("text/xml").send(twimlResponse);
   });
 
-  // TwiML for sales call
-  fastify.all("/sales-call-handler", async (request, reply) => {
-    const { flowId } = request.query;
-    console.log(`[Outbound] Handling sales call for flow: ${flowId}`);
-    
-    // If lead is already connected, bridge the calls
-    if (flowId && activeCalls.has(flowId)) {
-      const callData = activeCalls.get(flowId);
-      
-      if (callData.leadStatus === 'in-progress') {
-        // Lead is active, bridge the calls
-        const conferenceName = `conf_${flowId}`;
-        
-        const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
-          <Response>
-            <Say>Connecting you with the lead now.</Say>
-            <Dial>
-              <Conference>${conferenceName}</Conference>
-            </Dial>
-          </Response>`;
-        
-        // Mark as conference created
-        activeCalls.set(flowId, {
-          ...callData,
-          conferenceCreated: true
-        });
-        
-        reply.type("text/xml").send(twimlResponse);
-        return;
-      }
-    }
-    
-    // Otherwise, have the sales team wait
+  // TwiML for sales team with lead context
+  fastify.all("/sales-team-twiml", async (request, reply) => {
     const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
       <Response>
-        <Say>Please wait while we connect you with a lead.</Say>
-        <Play loop="10">https://${request.headers.host}/handoff.mp3</Play>
+        <Pause length="60"/>
       </Response>`;
-
     reply.type("text/xml").send(twimlResponse);
   });
 
-  // WebSocket for lead call streams
-  fastify.register(async (fastifyInstance) => {
-    fastifyInstance.get("/lead-media-stream", { websocket: true }, async (connection, req) => {
-      console.info("[Server] Twilio connected to lead media stream");
-      const { flowId } = req.query;
-
-      let streamSid = null;
-      let callSid = null;
-      let elevenLabsWs = null;
-
-      try {
-        // Get authenticated WebSocket URL
-        const signedUrl = await getSignedUrl();
-
-        // Connect to ElevenLabs
-        elevenLabsWs = new WebSocket(signedUrl);
-
-        // Handle open event for ElevenLabs WebSocket
-        elevenLabsWs.on("open", () => {
-          console.log("[ElevenLabs] Connected to Conversational AI");
-          
-          // Create initial prompt for the AI conversation
-          const initialConfig = {
-            type: "conversation_initiation_client_data",
-            conversation_config_override: {
-              agent: {
-                prompt: { prompt: "You are Heather, a care coordinator. Be conversational, show empathy, and engage with the caller. Your job is to keep them engaged until our care specialist joins the call. When that happens, you will no longer be needed." },
-                first_message: "Hello, this is Heather from care services. Thanks for your interest in our services. I'd like to learn a bit more about your needs while we wait for our care specialist to join us. Could you tell me a little about what kind of care you're looking for?",
-              },
-            }
-          };
-          
-          elevenLabsWs.send(JSON.stringify(initialConfig));
-        });
-
-        // Handle messages from ElevenLabs
-        elevenLabsWs.on("message", (data) => {
+  // Status callback for lead
+  fastify.post("/lead-status", async (request, reply) => {
+    const { CallSid, CallStatus } = request.body;
+    if (callStatuses[CallSid]) {
+      const previousStatus = callStatuses[CallSid].leadStatus;
+      callStatuses[CallSid].leadStatus = CallStatus.toLowerCase();
+      console.log(`Lead status updated: ${CallSid} - ${CallStatus}`);
+      
+      // Lead call is now in progress - ElevenLabs should connect
+      if (previousStatus !== "in-progress" && CallStatus.toLowerCase() === "in-progress") {
+        console.log(`Lead call ${CallSid} is now active. ElevenLabs should connect via /outbound-media-stream.`);
+        // Check if we can transfer to sales (if they're already on the line)
+        await checkAndTransfer(CallSid);
+      }
+      
+      // If call ended and we haven't completed the transfer, clean up
+      if (
+        (CallStatus.toLowerCase() === "completed" || 
+         CallStatus.toLowerCase() === "busy" || 
+         CallStatus.toLowerCase() === "failed" || 
+         CallStatus.toLowerCase() === "no-answer") && 
+        !callStatuses[CallSid].transferComplete
+      ) {
+        const salesCallSid = callStatuses[CallSid].salesCallSid;
+        console.log(`Lead call ${CallSid} ended before transfer completed. Ending related sales call ${salesCallSid}`);
+        
+        // End the corresponding sales call if it's still in progress
+        if (salesCallSid && callStatuses[salesCallSid]?.salesStatus === "in-progress") {
           try {
-            const message = JSON.parse(data);
-            
-            switch (message.type) {
-              case "conversation_initiation_metadata":
-                console.log("[ElevenLabs] Received initiation metadata");
-                break;
-              case "audio":
-                if (streamSid) {
-                  // Check if this call is still active or has been bridged
-                  if (flowId && activeCalls.has(flowId) && !activeCalls.get(flowId).conferenceCreated) {
-                    if (message.audio?.chunk) {
-                      // Skip "break time" messages
-                      const audioBase64 = message.audio.chunk;
-                      if (!shouldSkipAudio(audioBase64)) {
-                        const audioData = {
-                          event: "media",
-                          streamSid,
-                          media: {
-                            payload: audioBase64
-                          }
-                        };
-                        connection.send(JSON.stringify(audioData));
-                      }
-                    } else if (message.audio_event?.audio_base_64) {
-                      // Skip "break time" messages
-                      const audioBase64 = message.audio_event.audio_base_64;
-                      if (!shouldSkipAudio(audioBase64)) {
-                        const audioData = {
-                          event: "media",
-                          streamSid,
-                          media: {
-                            payload: audioBase64
-                          }
-                        };
-                        connection.send(JSON.stringify(audioData));
-                      }
-                    }
-                  } else {
-                    console.log("[ElevenLabs] Call has been bridged, no longer sending AI audio");
-                  }
-                }
-                break;
-              case "interruption":
-                if (streamSid) {
-                  connection.send(JSON.stringify({ event: "clear", streamSid }));
-                }
-                break;
-              case "ping":
-                if (message.ping_event?.event_id) {
-                  elevenLabsWs.send(JSON.stringify({
-                    type: "pong",
-                    event_id: message.ping_event.event_id
-                  }));
-                }
-                break;
-            }
+            await twilioClient.calls(salesCallSid).update({ status: "completed" });
           } catch (error) {
-            console.error("[ElevenLabs] Error processing message:", error);
+            console.error(`Failed to end sales call ${salesCallSid}:`, error);
           }
-        });
+        }
+      }
+    }
+    reply.send();
+  });
 
-        // Handle errors and closure for ElevenLabs WebSocket
-        elevenLabsWs.on("error", (error) => {
-          console.error("[ElevenLabs] WebSocket error:", error);
-        });
+  // Status callback for sales team
+  fastify.post("/sales-status", async (request, reply) => {
+    const { CallSid, CallStatus } = request.body;
+    if (callStatuses[CallSid]) {
+      const previousStatus = callStatuses[CallSid].salesStatus;
+      callStatuses[CallSid].salesStatus = CallStatus.toLowerCase();
+      console.log(`Sales status updated: ${CallSid} - ${CallStatus}`);
+      
+      // If call ended and we haven't completed the transfer, clean up
+      if (
+        (CallStatus.toLowerCase() === "completed" || 
+         CallStatus.toLowerCase() === "busy" || 
+         CallStatus.toLowerCase() === "failed" || 
+         CallStatus.toLowerCase() === "no-answer") && 
+        !callStatuses[CallSid].transferComplete
+      ) {
+        const leadCallSid = callStatuses[CallSid].leadCallSid;
+        console.log(`Sales call ${CallSid} ended before transfer completed. Continuing with AI handling lead call ${leadCallSid}`);
+        // No need to end the lead call - the AI can continue handling it
+      } else if (previousStatus !== "in-progress" && CallStatus.toLowerCase() === "in-progress") {
+        // Call just became in-progress, check if we can transfer
+        const leadCallSid = callStatuses[CallSid].leadCallSid;
+        await checkAndTransfer(leadCallSid);
+      }
+    }
+    reply.send();
+  });
 
-        elevenLabsWs.on("close", () => {
-          console.log("[ElevenLabs] Disconnected");
-        });
+  // TwiML for handoff
+  fastify.all("/transfer-twiml", async (request, reply) => {
+    const salesCallSid = request.query.salesCallSid;
+    const leadCallSid = Object.keys(callStatuses).find(
+      sid => callStatuses[sid].salesCallSid === salesCallSid
+    );
 
-        // Handle messages from Twilio
-        connection.on("message", async (message) => {
+    // Mark the transfer as complete to signal that ElevenLabs connection can be closed
+    if (leadCallSid) {
+      callStatuses[leadCallSid].transferComplete = true;
+      callStatuses[salesCallSid].transferComplete = true;
+    }
+
+    const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+      <Response>
+        <Play>https://${request.headers.host}/handoff.mp3</Play>
+        <Dial callSid="${salesCallSid}" />
+      </Response>`;
+    reply.type("text/xml").send(twimlResponse);
+  });
+
+  // Check and transfer when both are ready
+  async function checkAndTransfer(leadCallSid) {
+    const leadStatus = callStatuses[leadCallSid]?.leadStatus;
+    const salesCallSid = callStatuses[leadCallSid]?.salesCallSid;
+    const salesStatus = callStatuses[salesCallSid]?.salesStatus;
+
+    console.log(`Checking transfer: lead=${leadStatus}, sales=${salesStatus}`);
+
+    // If lead call becomes active and sales call is not, we should make sure ElevenLabs is handling it
+    if (leadStatus === "in-progress" && (!salesStatus || salesStatus !== "in-progress")) {
+      console.log(`Lead call ${leadCallSid} active but sales not ready. Ensuring ElevenLabs handles the call.`);
+      // We don't need to do anything special - the ElevenLabs WebSocket connection 
+      // will be established when the call connects in the outbound-media-stream endpoint
+    }
+    
+    if (leadStatus === "in-progress" && salesStatus === "in-progress") {
+      console.log(`Bridging calls: lead=${leadCallSid}, sales=${salesCallSid}`);
+      try {
+        // Store the server hostname to use in the URL
+        const hostname = fastify.server.address().address === "::" 
+          ? "localhost" 
+          : fastify.server.address().address;
+        const port = fastify.server.address().port;
+        const serverHost = `${hostname}:${port}`;
+        
+        // Mark calls as being transferred in the status before the API call
+        callStatuses[leadCallSid].transferInProgress = true;
+        callStatuses[salesCallSid].transferInProgress = true;
+        
+        // Immediately update the call to bridge them
+        await twilioClient.calls(leadCallSid).update({
+          url: `https://${serverHost}/transfer-twiml?salesCallSid=${salesCallSid}`,
+        });
+        
+        console.log(`Transfer initiated: ${leadCallSid} to ${salesCallSid}`);
+      } catch (error) {
+        // Reset the flags if the transfer failed
+        callStatuses[leadCallSid].transferInProgress = false;
+        callStatuses[salesCallSid].transferInProgress = false;
+        console.error(`Transfer failed:`, error);
+      }
+    } else {
+      console.log(`Transfer conditions not met: lead=${leadStatus}, sales=${salesStatus}`);
+    }
+  }
+
+  // WebSocket route for AI agent
+  fastify.register(async (fastifyInstance) => {
+    fastifyInstance.get(
+      "/outbound-media-stream",
+      { websocket: true },
+      (ws, req) => {
+        console.info("[Server] Twilio connected to outbound media stream");
+
+        let streamSid = null;
+        let callSid = null;
+        let elevenLabsWs = null;
+        let customParameters = null;
+
+        ws.on("error", console.error);
+
+        const setupElevenLabs = async () => {
           try {
-            const data = JSON.parse(message);
-            
-            switch (data.event) {
-              case "start":
-                streamSid = data.start.streamSid;
-                callSid = data.start.callSid;
-                console.log(`[Twilio] Stream started with ID: ${streamSid}, CallSid: ${callSid}`);
-                
-                // Update the call status
-                if (flowId && activeCalls.has(flowId)) {
-                  const callData = activeCalls.get(flowId);
-                  activeCalls.set(flowId, {
-                    ...callData,
-                    leadStatus: 'in-progress'
-                  });
-                  
-                  // If sales team is already connected, bridge the calls
-                  if (callData.salesStatus === 'in-progress' && !callData.conferenceCreated) {
-                    await bridgeCalls(flowId);
-                  }
+            const signedUrl = await getSignedUrl();
+            elevenLabsWs = new WebSocket(signedUrl);
+
+            elevenLabsWs.on("open", () => {
+              console.log("[ElevenLabs] Connected to Conversational AI");
+
+              const leadInfoText = `Lead Name: ${customParameters?.leadName || "Unknown"}
+Care Reason: ${customParameters?.careReason || "Unknown"}
+Care Needed For: ${customParameters?.careNeededFor || "Unknown"}`;
+
+              const fullPrompt = `${customParameters?.prompt || "You are Heather, a friendly and warm care coordinator for First Light Home Care, a home healthcare company. You're calling to follow up on care service inquiries with a calm and reassuring voice, using natural pauses to make the conversation feel more human-like. Your main goals are: 1. Verify the details submitted in the care request from the Point of Contact below for the 'Care Needed For'. 2. Show empathy for the care situation. 3. Confirm interest in receiving care services for the 'Care Needed For'. 4. Set expectations for next steps, which are to discuss with a care specialist. Use casual, friendly language, avoiding jargon and technical terms, to make the lead feel comfortable and understood. Listen carefully and address concerns with empathy, focusing on building rapport. If asked about pricing, explain that a care specialist will discuss detailed pricing options soon. If the person is not interested, thank them for their time and end the call politely."}\n\nHere are some additional key details from the obtained lead to guide the conversation:\n${leadInfoText}`;
+
+              const initialConfig = {
+                type: "conversation_initiation_client_data",
+                conversation_config_override: {
+                  agent: {
+                    prompt: { prompt: fullPrompt },
+                    first_message: `Hi is this ${customParameters?.leadName || "there"}? This is Heather from First Light Home Care. I understand you're looking for care for ${customParameters?.careNeededFor || "someone"}. Is that correct?`,
+                  },
+                },
+              };
+              elevenLabsWs.send(JSON.stringify(initialConfig));
+            });
+
+            elevenLabsWs.on("message", (data) => {
+              try {
+                const message = JSON.parse(data);
+                if (message.type === "audio" && streamSid) {
+                  const audioData = {
+                    event: "media",
+                    streamSid,
+                    media: {
+                      payload:
+                        message.audio?.chunk ||
+                        message.audio_event?.audio_base_64,
+                    },
+                  };
+                  ws.send(JSON.stringify(audioData));
+                } else if (message.type === "interruption" && streamSid) {
+                  ws.send(JSON.stringify({ event: "clear", streamSid }));
                 }
+              } catch (error) {
+                console.error("[ElevenLabs] Error processing message:", error);
+              }
+            });
+
+            elevenLabsWs.on("error", (error) =>
+              console.error("[ElevenLabs] WebSocket error:", error),
+            );
+            elevenLabsWs.on("close", () =>
+              console.log("[ElevenLabs] Disconnected"),
+            );
+          } catch (error) {
+            console.error("[ElevenLabs] Setup error:", error);
+          }
+        };
+
+        setupElevenLabs();
+
+        ws.on("message", (message) => {
+          try {
+            const msg = JSON.parse(message);
+            console.log(`[Twilio] Received event: ${msg.event}`);
+            switch (msg.event) {
+              case "start":
+                streamSid = msg.start.streamSid;
+                callSid = msg.start.callSid;
+                customParameters = msg.start.customParameters;
+                console.log(
+                  `[Twilio] Stream started - StreamSid: ${streamSid}, CallSid: ${callSid}`,
+                );
+                console.log("[Twilio] Custom parameters:", customParameters);
                 break;
               case "media":
-                if (elevenLabsWs && elevenLabsWs.readyState === WebSocket.OPEN) {
-                  // Only send if we're not bridged yet
-                  if (flowId && activeCalls.has(flowId) && !activeCalls.get(flowId).conferenceCreated) {
-                    const audioMessage = {
-                      user_audio_chunk: Buffer.from(data.media.payload, "base64").toString("base64")
-                    };
-                    elevenLabsWs.send(JSON.stringify(audioMessage));
+                // Check if we should close the ElevenLabs connection because the call has been transferred
+                if (callSid && callStatuses[callSid]?.transferComplete) {
+                  console.log(`[Twilio] Call ${callSid} has been transferred, closing ElevenLabs connection`);
+                  if (elevenLabsWs?.readyState === WebSocket.OPEN) {
+                    elevenLabsWs.close();
                   }
+                  break;
+                }
+                
+                if (elevenLabsWs?.readyState === WebSocket.OPEN) {
+                  const audioMessage = {
+                    user_audio_chunk: Buffer.from(
+                      msg.media.payload,
+                      "base64",
+                    ).toString("base64"),
+                  };
+                  elevenLabsWs.send(JSON.stringify(audioMessage));
                 }
                 break;
               case "stop":
                 console.log(`[Twilio] Stream ${streamSid} ended`);
-                if (elevenLabsWs) {
+                if (elevenLabsWs?.readyState === WebSocket.OPEN)
                   elevenLabsWs.close();
-                }
-                // Clean up call flow data
-                if (flowId) {
-                  cleanupCallFlow(flowId);
-                }
                 break;
             }
           } catch (error) {
@@ -468,47 +386,11 @@ export function registerOutboundRoutes(fastify) {
           }
         });
 
-        // Handle connection closure
-        connection.on("close", () => {
+        ws.on("close", () => {
           console.log("[Twilio] Client disconnected");
-          if (elevenLabsWs) {
-            elevenLabsWs.close();
-          }
+          if (elevenLabsWs?.readyState === WebSocket.OPEN) elevenLabsWs.close();
         });
-
-        // Handle connection errors
-        connection.on("error", (error) => {
-          console.error("[Twilio] WebSocket error:", error);
-          if (elevenLabsWs) {
-            elevenLabsWs.close();
-          }
-        });
-
-      } catch (error) {
-        console.error("[Server] Error initializing lead conversation:", error);
-        if (elevenLabsWs) {
-          elevenLabsWs.close();
-        }
-        connection.socket.close();
-      }
-    });
+      },
+    );
   });
-  
-  // Helper function to detect "break time" markers
-  function shouldSkipAudio(audioBase64) {
-    try {
-      // Check if this is a system message like "break time"
-      // These are often very short audio clips with specific patterns
-      const buffer = Buffer.from(audioBase64, 'base64');
-      // Very short audio segments (less than certain size) might be system messages
-      if (buffer.length < 1000) {
-        console.log("[ElevenLabs] Skipping potential system message audio chunk");
-        return true;
-      }
-      return false;
-    } catch (e) {
-      console.error("[ElevenLabs] Error checking audio content:", e);
-      return false;
-    }
-  }
 }
