@@ -279,7 +279,8 @@ export function registerOutboundRoutes(fastify) {
         (CallStatus.toLowerCase() === "completed" || 
          CallStatus.toLowerCase() === "busy" || 
          CallStatus.toLowerCase() === "failed" || 
-         CallStatus.toLowerCase() === "no-answer") && 
+         CallStatus.toLowerCase() === "no-answer" ||
+         CallStatus.toLowerCase() === "canceled") && 
         !callStatuses[CallSid].transferComplete
       ) {
         const leadCallSid = callStatuses[CallSid].leadCallSid;
@@ -652,7 +653,7 @@ export function registerOutboundRoutes(fastify) {
                   // Send instruction to ElevenLabs to verify contact info and handle the call
                   const unavailableInstruction = {
                     type: "custom_instruction",
-                    instruction: "Our care specialists are currently unavailable to join this call. Please inform the person that our team will contact them soon. Verify their contact information including phone number and email to ensure it matches what we have on file. Ask if there's a preferred time for our team to follow up. Be sure to confirm all their information is correct before ending the call."
+                    instruction: "I need to inform the caller that right now our care specialists are not available to join this call. Clearly state that no one is available at this moment but our team will contact them soon. Verify their contact information including phone number and email, specifically confirming that it matches what they previously submitted in their inquiry. Ask if there's a preferred time for our team to follow up. Be sure to confirm all their information is correct before ending the call."
                   };
                   elevenLabsWs.send(JSON.stringify(unavailableInstruction));
                   
