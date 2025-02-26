@@ -127,6 +127,7 @@ export function registerOutboundRoutes(fastify) {
 
     const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
       <Response>
+        <Pause length="1"/>
         <Connect>
           <Stream url="wss://${request.headers.host}/outbound-media-stream">
             <Parameter name="prompt" value="${prompt}" />
@@ -352,15 +353,20 @@ export function registerOutboundRoutes(fastify) {
 Care Reason: ${customParameters?.careReason || "Unknown"}
 Care Needed For: ${customParameters?.careNeededFor || "Unknown"}`;
 
-              const fullPrompt = `${customParameters?.prompt || "You are Heather, a friendly and warm care coordinator for First Light Home Care, a home healthcare company. You're calling to follow up on care service inquiries with a calm and reassuring voice, using natural pauses to make the conversation feel more human-like. Your main goals are: 1. Verify the details submitted in the care request from the Point of Contact below for the 'Care Needed For'. 2. Show empathy for the care situation. 3. Confirm interest in receiving care services for the 'Care Needed For'. 4. Set expectations for next steps, which are to discuss with a care specialist. Use casual, friendly language, avoiding jargon and technical terms, to make the lead feel comfortable and understood. Listen carefully and address concerns with empathy, focusing on building rapport. If asked about pricing, explain that a care specialist will discuss detailed pricing options soon. If the person is not interested, thank them for their time and end the call politely."}\n\nHere are some additional key details from the obtained lead to guide the conversation:\n${leadInfoText}`;
+              const fullPrompt = `${customParameters?.prompt || "You are Heather, a friendly and warm care coordinator for First Light Home Care, a home healthcare company. You're calling to follow up on care service inquiries with a calm and reassuring voice, using natural pauses to make the conversation feel more human-like. Your main goals are: 1. Verify the details submitted in the care request from the Point of Contact below for the 'Care Needed For'. 2. Show empathy for the care situation. 3. Confirm interest in receiving care services for the 'Care Needed For'. 4. Set expectations for next steps, which are to discuss with a care specialist. Use casual, friendly language, avoiding jargon and technical terms, to make the lead feel comfortable and understood. Listen carefully and address concerns with empathy, focusing on building rapport. If asked about pricing, explain that a care specialist will discuss detailed pricing options soon. If the person is not interested, thank them for their time and end the call politely."}\n\nHere are some additional key details from the obtained lead to guide the conversation:\n${leadInfoText}\n\nIMPORTANT: When the call connects, wait for the person to say hello or acknowledge the call before you start speaking. If they don't say anything within 2-3 seconds, then begin with a warm greeting. Always start with a natural greeting like 'Hello' and pause briefly before continuing with your introduction.`;
 
+              // Set up the conversation with wait_for_user_speech set to true
               const initialConfig = {
                 type: "conversation_initiation_client_data",
                 conversation_config_override: {
                   agent: {
                     prompt: { prompt: fullPrompt },
-                    first_message: `Hi is this ${customParameters?.leadName || "there"}? This is Heather from First Light Home Care. I understand you're looking for care for ${customParameters?.careNeededFor || "someone"}. Is that correct?`,
+                    first_message: `Hello, this is Heather from First Light Home Care. I'm calling about the care services inquiry for ${customParameters?.careNeededFor}. Is this ${customParameters?.leadName || "there"}?`,
+                    wait_for_user_speech: true,
                   },
+                  conversation: {
+                    initial_audio_silence_timeout_ms: 3000, // Wait 3 seconds for user to speak before starting
+                  }
                 },
               };
               elevenLabsWs.send(JSON.stringify(initialConfig));
@@ -370,6 +376,7 @@ Care Needed For: ${customParameters?.careNeededFor || "Unknown"}`;
               try {
                 const message = JSON.parse(data);
                 if (message.type === "audio" && streamSid) {
+                  console.log(`[ElevenLabs] Sending AI audio to call ${callSid}`);
                   const audioData = {
                     event: "media",
                     streamSid,
@@ -381,7 +388,14 @@ Care Needed For: ${customParameters?.careNeededFor || "Unknown"}`;
                   };
                   ws.send(JSON.stringify(audioData));
                 } else if (message.type === "interruption" && streamSid) {
+                  console.log(`[ElevenLabs] Interruption detected, clearing buffer for call ${callSid}`);
                   ws.send(JSON.stringify({ event: "clear", streamSid }));
+                } else if (message.type === "speech_started") {
+                  console.log(`[ElevenLabs] AI agent started speaking on call ${callSid}`);
+                } else if (message.type === "speech_ended") {
+                  console.log(`[ElevenLabs] AI agent finished speaking on call ${callSid}`);
+                } else if (message.type === "waiting_for_user_speech") {
+                  console.log(`[ElevenLabs] AI agent waiting for user to speak on call ${callSid}`);
                 }
               } catch (error) {
                 console.error("[ElevenLabs] Error processing message:", error);
@@ -426,6 +440,11 @@ Care Needed For: ${customParameters?.careNeededFor || "Unknown"}`;
                 }
                 
                 if (elevenLabsWs?.readyState === WebSocket.OPEN) {
+                  // Log when we receive user audio to help debug conversation flow
+                  if (msg.media.payload && Buffer.from(msg.media.payload, "base64").length > 0) {
+                    console.log(`[Twilio] Received user audio from call ${callSid}`);
+                  }
+                  
                   const audioMessage = {
                     user_audio_chunk: Buffer.from(
                       msg.media.payload,
