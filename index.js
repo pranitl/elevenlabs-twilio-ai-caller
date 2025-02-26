@@ -2,8 +2,12 @@ import Fastify from "fastify";
 import dotenv from "dotenv";
 import fastifyFormBody from "@fastify/formbody";
 import fastifyWs from "@fastify/websocket";
-import { registerInboundRoutes } from './inbound-calls.js';
+import fastifyStatic from "@fastify/static";
+import path from "path";
+import { fileURLToPath } from 'url';
 import { registerOutboundRoutes } from './outbound-calls.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Load environment variables from .env file
 dotenv.config();
@@ -15,6 +19,10 @@ const fastify = Fastify({
 
 fastify.register(fastifyFormBody);
 fastify.register(fastifyWs);
+fastify.register(fastifyStatic, {
+  root: path.join(__dirname),
+  prefix: '/',
+});
 
 const PORT = process.env.PORT || 8000;
 
@@ -27,7 +35,6 @@ fastify.get("/", async (_, reply) => {
 const start = async () => {
   try {
     // Register route handlers
-    await registerInboundRoutes(fastify);
     await registerOutboundRoutes(fastify);
 
     // Start listening
