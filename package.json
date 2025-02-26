@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "start": "node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
+    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage"
   },
   "keywords": [],
   "author": "",
@@ -14,6 +16,7 @@
   "dependencies": {
     "@11labs/client": "^0.0.4",
     "@fastify/formbody": "^8.0.1",
+    "@fastify/static": "^6.12.0",
     "@fastify/websocket": "^11.0.1",
     "@types/node": "^18.0.6",
     "axios": "^1.7.9",
@@ -23,5 +26,24 @@
     "node-fetch": "^3.3.2",
     "twilio": "^5.3.7",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "jest-mock-extended": "^3.0.5",
+    "mock-socket": "^9.3.1",
+    "nock": "^13.5.1",
+    "supertest": "^6.3.4"
+  },
+  "jest": {
+    "transform": {},
+    "moduleNameMapper": {
+      "^(\\.{1,2}/.*)\\.js$": "$1"
+    },
+    "testEnvironment": "node",
+    "collectCoverageFrom": [
+      "**/*.js",
+      "!node_modules/**",
+      "!coverage/**"
+    ]
   }
 }
