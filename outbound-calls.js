@@ -4,6 +4,9 @@ import Twilio from "twilio";
 // Store call statuses
 const callStatuses = {};
 
+// Store the most recent request host for use in callbacks
+let mostRecentHost = null;
+
 export function registerOutboundRoutes(fastify) {
   const {
     ELEVENLABS_API_KEY,
@@ -27,6 +30,20 @@ export function registerOutboundRoutes(fastify) {
   }
 
   const twilioClient = new Twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+
+  // Middleware to track the most recent host
+  fastify.addHook('onRequest', (request, reply, done) => {
+    if (request.headers.host) {
+      mostRecentHost = request.headers.host;
+      console.log(`Updated most recent host: ${mostRecentHost}`);
+    }
+    done();
+  });
+
+  // Add a route to serve the handoff.mp3 file directly
+  fastify.get('/audio/handoff.mp3', (request, reply) => {
+    reply.sendFile('handoff.mp3');
+  });
 
   async function getSignedUrl() {
     try {
@@ -198,27 +215,6 @@ export function registerOutboundRoutes(fastify) {
     reply.send();
   });
 
-  // TwiML for handoff
-  fastify.all("/transfer-twiml", async (request, reply) => {
-    const salesCallSid = request.query.salesCallSid;
-    const leadCallSid = Object.keys(callStatuses).find(
-      sid => callStatuses[sid].salesCallSid === salesCallSid
-    );
-
-    // Mark the transfer as complete to signal that ElevenLabs connection can be closed
-    if (leadCallSid) {
-      callStatuses[leadCallSid].transferComplete = true;
-      callStatuses[salesCallSid].transferComplete = true;
-    }
-
-    const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
-      <Response>
-        <Play>https://${request.headers.host}/handoff.mp3</Play>
-        <Dial callSid="${salesCallSid}" />
-      </Response>`;
-    reply.type("text/xml").send(twimlResponse);
-  });
-
   // Check and transfer when both are ready
   async function checkAndTransfer(leadCallSid) {
     const leadStatus = callStatuses[leadCallSid]?.leadStatus;
@@ -237,23 +233,33 @@ export function registerOutboundRoutes(fastify) {
     if (leadStatus === "in-progress" && salesStatus === "in-progress") {
       console.log(`Bridging calls: lead=${leadCallSid}, sales=${salesCallSid}`);
       try {
-        // Store the server hostname to use in the URL
-        const hostname = fastify.server.address().address === "::" 
-          ? "localhost" 
-          : fastify.server.address().address;
-        const port = fastify.server.address().port;
-        const serverHost = `${hostname}:${port}`;
+        // Use the stored host value or fall back to the Replit domain
+        const serverHost = mostRecentHost || "elevenlabs-twilio-ai-caller-spicywalnut.replit.app";
+        console.log(`Using server host for transfer: ${serverHost}`);
+        
+        // Generate a unique conference room name
+        const conferenceRoom = `ConferenceRoom_${salesCallSid}`;
+        console.log(`Creating conference room: ${conferenceRoom}`);
         
         // Mark calls as being transferred in the status before the API call
         callStatuses[leadCallSid].transferInProgress = true;
         callStatuses[salesCallSid].transferInProgress = true;
+        callStatuses[leadCallSid].conferenceRoom = conferenceRoom;
+        callStatuses[salesCallSid].conferenceRoom = conferenceRoom;
         
-        // Immediately update the call to bridge them
+        // First redirect the lead to the conference
+        console.log(`Redirecting lead ${leadCallSid} to conference`);
         await twilioClient.calls(leadCallSid).update({
           url: `https://${serverHost}/transfer-twiml?salesCallSid=${salesCallSid}`,
         });
         
-        console.log(`Transfer initiated: ${leadCallSid} to ${salesCallSid}`);
+        // Then redirect the sales team to the same conference
+        console.log(`Redirecting sales ${salesCallSid} to conference`);
+        await twilioClient.calls(salesCallSid).update({
+          url: `https://${serverHost}/join-conference?conferenceRoom=${conferenceRoom}`,
+        });
+        
+        console.log(`Transfer initiated: ${leadCallSid} and ${salesCallSid} to conference ${conferenceRoom}`);
       } catch (error) {
         // Reset the flags if the transfer failed
         callStatuses[leadCallSid].transferInProgress = false;
@@ -264,6 +270,60 @@ export function registerOutboundRoutes(fastify) {
       console.log(`Transfer conditions not met: lead=${leadStatus}, sales=${salesStatus}`);
     }
   }
+
+  // TwiML for handoff
+  fastify.all("/transfer-twiml", async (request, reply) => {
+    const salesCallSid = request.query.salesCallSid;
+    console.log(`Handling transfer request for sales call: ${salesCallSid}`);
+    
+    const leadCallSid = Object.keys(callStatuses).find(
+      sid => callStatuses[sid].salesCallSid === salesCallSid
+    );
+    
+    console.log(`Found matching lead call: ${leadCallSid}`);
+
+    // Mark the transfer as complete to signal that ElevenLabs connection can be closed
+    if (leadCallSid) {
+      callStatuses[leadCallSid].transferComplete = true;
+      callStatuses[salesCallSid].transferComplete = true;
+    } else {
+      console.error(`Could not find lead call for sales call ${salesCallSid}`);
+    }
+
+    // Get the server host to construct the audio URL
+    const serverHost = mostRecentHost || request.headers.host;
+    
+    // Use the local handoff.mp3 file instead of text-to-speech
+    const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+      <Response>
+        <Play>https://${serverHost}/audio/handoff.mp3</Play>
+        <Dial>
+          <Conference waitUrl="https://twimlets.com/holdmusic?Bucket=com.twilio.music.classical" statusCallbackEvent="join leave" beep="false">
+            ConferenceRoom_${salesCallSid}
+          </Conference>
+        </Dial>
+      </Response>`;
+    
+    console.log(`Sending transfer TwiML response for call ${leadCallSid} with audio URL: https://${serverHost}/audio/handoff.mp3`);
+    reply.type("text/xml").send(twimlResponse);
+  });
+
+  // TwiML to join sales team to the conference
+  fastify.all("/join-conference", async (request, reply) => {
+    const conferenceRoomSid = request.query.conferenceRoom;
+    console.log(`Joining sales team to conference: ${conferenceRoomSid}`);
+    
+    const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+      <Response>
+        <Dial>
+          <Conference waitUrl="https://twimlets.com/holdmusic?Bucket=com.twilio.music.classical" beep="false">
+            ${conferenceRoomSid}
+          </Conference>
+        </Dial>
+      </Response>`;
+    
+    reply.type("text/xml").send(twimlResponse);
+  });
 
   // WebSocket route for AI agent
   fastify.register(async (fastifyInstance) => {
