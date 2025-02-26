@@ -1,146 +1,178 @@
-# Connect Elevenlabs Conversation AI Agent to Twilio for Inbound and Outbound Calls
+# ElevenLabs-Twilio AI Caller
 
-![CleanShot 2024-12-11 at 22 52 50 1](https://github.com/user-attachments/assets/97108c31-0679-44e5-a7a9-cc7e640dcbf1)
+This project integrates Twilio's telephony capabilities with ElevenLabs' conversational AI to create an automated phone calling system. It supports both outbound and inbound calls with features like custom prompts, lead management, and sales team handoff.
 
-Watch the video tutorial here: https://youtu.be/_BxzbGh9uvk
+## Features
+- **Outbound Calls**: Initiate AI-powered calls with customizable prompts
+- **Inbound Call Handling**: Forward incoming calls to sales team
+- **Authentication**: Secure ElevenLabs API integration
+- **Custom Prompts**: Support for dynamic conversation prompts via make.com
+- **Lead Management**: Handle lead data and context
+- **Sales Team Handoff**: Seamless transfer from AI to human agents
+- **WebSocket Support**: Real-time audio streaming
 
-## Overview
+## Prerequisites
+- Node.js (v20 or higher)
+- Twilio account with a phone number
+- ElevenLabs account with API access
+- Replit account (optional, for deployment)
+- Make.com account (for automation)
 
-ElevenLabs recently released their [**Conversational AI Agent**](https://elevenlabs.io/conversational-ai), a tool for building interactive voice conversations. 
+## Setup Instructions
 
-This repository provides the backend code to connect **Twilio** to your ElevenLabs Conversational AI Agent. With this setup, you can:
-
-- Handle **inbound calls** from users.
-- Initiate **outbound calls** programmatically.
-- Pass **custom parameters** (e.g., user names, prompts) to personalize conversations.
-
-This system is ideal for businesses looking to automate customer interactions, enhance call workflows, and create tailored user experiences at a low cost.
-
----
-
-### Why So Many Scripts?
-
-In the 'forTheLegends' folder I inclulde 7x different scripts:
-
-![CleanShot 2024-12-11 at 14 24 28](https://github.com/user-attachments/assets/04b71136-3bbd-4020-aee4-e57dc0d861b3)
-
-When I was coding out the final scripts that I demo in the above video ('inbound-calls.js' & 'outbound-calls.js'), I had to incrementally build out all of the scripts in the 'forTheLegends' folder.
-
-They were difficult to build and get right, and so I thought they could hold some inherent value for other people who are also looking to build custom code solutions for their Elevenlabs agent.
-
-I decided to include them in the repo as they might be good checkpoints/ starting points for other projects.
-
-Here's what each script accomplishes:
-
-#### Inbound Calls:
-- **Unauthenticated inbound calls**: Basic inbound calls without custom parameter handling.
-- **Authenticated inbound calls**: Enables secure inbound calls with authentication.
-- **Inbound calls with custom parameters**: Pass specific user data (e.g., names or preferences) into the ElevenLabs agent for tailored conversations.
-
-#### Outbound Calls:
-- **Unauthenticated outbound calls**: Basic outbound calls without custom parameter handling.
-- **Authenticated outbound calls**: Securely initiate outbound calls with authentication.
-- **Outbound calls with custom parameters**: Pass specific user data into the agent for personalized interactions.
-- **Boss Mode: Outbound calls with custom parameters from Make.com**: Use tools like Make.com to dynamically trigger calls and pass custom data (e.g., from a Google Sheet) into the ElevenLabs agent.
-
-This breakdown provides all the flexibility you need to handle various call workflows while leveraging the full power of ElevenLabs' Conversational AI.
-
----
-
-## Features:
-
-- Handle **inbound and outbound calls** seamlessly.
-- Authenticate requests for enhanced security.
-- Pass custom parameters to personalize interactions.
-- Integrate with **Make.com** to dynamically trigger calls with custom data.
-
----
-
-## System Architecture
-
-![CleanShot 2024-12-11 at 13 02 52](https://github.com/user-attachments/assets/30d38b95-a56b-419f-ad37-5e1fef0cab6a)
-
----
-
-## Passing Through Custom Parameters
-
-You need to use authenticated requests in order to pass custom variables into the agent.
-
-Make sure to follow these settings to configure your AI agent (from within ElevenLabs) to:
-
-1. Work with Twilio
-2. Be able to use authenticated requests
-
-Settings for Twilio: [https://elevenlabs.io/docs/conversational-ai/guides/conversational-ai-twilio](https://elevenlabs.io/docs/conversational-ai/guides/conversational-ai-twilio)
-
-Settings for authenticated requests: [https://elevenlabs.io/docs/conversational-ai/customization/conversation-configuration](https://elevenlabs.io/docs/conversational-ai/customization/conversation-configuration)
-
-**Note**: Make sure to also turn on "Enable Authentication."
-
-![CleanShot 2024-12-11 at 14 01 09](https://github.com/user-attachments/assets/5deaca18-4aee-467d-8925-f67957cf6e08)
-
----
-
-## Authenticated vs. Unauthenticated Workflow
-
-- **Unauthenticated calls**: These calls do not allow for setting custom parameters, making them suitable for basic scenarios.
-- **Authenticated calls**: These calls enable custom parameter handling, allowing you to create personalized experiences for your users.
-
-![CleanShot 2024-12-11 at 13 21 50](https://github.com/user-attachments/assets/089bfaf2-5441-4ee0-8b11-a16a00b9383f)
-
----
-
-## Passing in Custom Values from Make.com
-
-We can pass in custom values from Make.com when triggering the call. For example, you can use a Google Sheet with customer details (e.g., name, company, custom prompts) to dynamically feed data into the AI agent.
-
-### Workflow:
-
-1. Use **Make.com** to trigger an outbound call with parameters.
-2. Twilio uses **TwiML** to pass the variables into the Media Stream.
-3. The WebSocket server accesses these variables and passes them to the ElevenLabs agent.
-
-![CleanShot 2024-12-11 at 13 05 36](https://github.com/user-attachments/assets/382c95b5-4417-42e1-82ae-0ea8488d5878)
-
----
-
-## How to Set Up
-
-### Create `.env` File
-
-```env
-ELEVENLABS_AGENT_ID=your-elevenlabs-agent-id
-ELEVENLABS_API_KEY=your-elevenlabs-api-key
-TWILIO_ACCOUNT_SID=your-twilio-account-sid
-TWILIO_AUTH_TOKEN=your-twilio-auth-token
-TWILIO_PHONE_NUMBER=your-twilio-phone-number
+1. **Clone the Repository**
+```bash
+git clone <repository-url>
+cd elevenlabs-twilio-ai-caller
 ```
 
-### Install Dependencies:
+2. **Install Dependencies**
 ```bash
 npm install
 ```
 
-### Start the Server:
+3. **Configure Environment Variables**
+Create a `.env` file in the root directory with the following:
+```
+ELEVENLABS_API_KEY=your_elevenlabs_api_key
+ELEVENLABS_AGENT_ID=your_elevenlabs_agent_id
+TWILIO_ACCOUNT_SID=your_twilio_account_sid
+TWILIO_AUTH_TOKEN=your_twilio_auth_token
+TWILIO_PHONE_NUMBER=+1xxxxxxxxxx
+SALES_TEAM_PHONE_NUMBER=+1xxxxxxxxxx
+PORT=8000
+```
+
+4. **Prepare Audio Files**
+- Place `handoff.mp3` in the root directory for call transfers
+
+5. **Run the Application**
 ```bash
 npm start
 ```
 
----
+## Environment Variables
+| Variable | Description | Required |
+|----------|-------------|----------|
+| ELEVENLABS_API_KEY | ElevenLabs API key | Yes |
+| ELEVENLABS_AGENT_ID | ElevenLabs Agent ID | Yes |
+| TWILIO_ACCOUNT_SID | Twilio Account SID | Yes |
+| TWILIO_AUTH_TOKEN | Twilio Auth Token | Yes |
+| TWILIO_PHONE_NUMBER | Twilio source phone number | Yes |
+| SALES_TEAM_PHONE_NUMBER | Sales team destination number | Yes |
+| PORT | Server port (default: 8000) | No |
 
-## Resources
+## Usage
 
-Here are useful resources for setting up and understanding the project:
+### Making an Outbound Call
+Send a POST request to `/outbound-call-to-sales`:
+```bash
+curl -X POST https://your-domain.com/outbound-call-to-sales \
+-H "Content-Type: application/json" \
+-d '{
+  "number": "+14088210387",
+  "prompt": "You are Heather from First Light Home Care...",
+  "leadinfo": {
+    "LeadName": "John Doe",
+    "CareReason": "needs help due to macular degeneration",
+    "CareNeededFor": "Dorothy"
+  }
+}'
+```
 
-- [ElevenLabs Conversational AI Agent Documentation](https://elevenlabs.io/conversational-ai)
-- [Settings for Twilio Integration](https://elevenlabs.io/docs/conversational-ai/guides/conversational-ai-twilio)
-- [Settings for Authenticated Requests](https://elevenlabs.io/docs/conversational-ai/customization/conversation-configuration)
-- Watch the tutorial video: https://youtu.be/_BxzbGh9uvk
+### Using with Make.com
+To automate outbound calls using Make.com, follow these steps:
 
----
+1. **Set Up a Mailhook**
+   - Create a Mailhook in Make.com to receive email notifications containing lead information.
 
-Star ⭐ this repository if you find it helpful!
+2. **OpenAI Transform Text to Structured Data**
+   - Use an OpenAI module to parse the email text into structured data.
+   - Configure the OpenAI module with the following data definitions:
+     - `number`: Phone number of the point of contact (E.164 format, e.g., "+12073223372")
+     - `LeadName`: Point of Contact name (text)
+     - `CareReason`: Concise summary of why care is needed (text, e.g., "Needs help due to macular degeneration and is a fall risk.")
+     - `CareNeededFor`: Name of the person needing care and relation (if provided, text, e.g., "Dorothy")
+   - Use the gpt-4o-mini (system) model with this prompt:
+     ```
+     I am providing you an email about the lead information I just obtained. You need to parse the text and provide it for a sales agent to call the lead so keep that audience in mind.
+     ```
 
-Want to donate? https://bartslodyczka.gumroad.com/l/potvn
+3. **HTTP Make a Request Module**
+   - Configure an HTTP module to send a POST request to `https://elevenlabs-twilio-ai-caller-spicywalnut.replit.app/outbound-call-to-sales`
+   - Use this JSON request body:
+   ```json
+   {
+     "prompt": "You are Heather, a friendly and warm care coordinator for First Light Home Care, a home healthcare company. You’re calling to follow up on care service inquiries with a calm and reassuring voice, using natural pauses to make the conversation feel more human-like. Your main goals are: 1. Verify the details submitted in the care request from the Point of Contact below for the 'Care Needed For'. 2. Show empathy for the care situation. 3. Confirm interest in receiving care services for the 'Care Needed For'. 4. Set expectations for next steps, which are to discuss with a care specialist. Use casual, friendly language, avoiding jargon and technical terms, to make the lead feel comfortable and understood. Listen carefully and address concerns with empathy, focusing on building rapport. If asked about pricing, explain that a care specialist will discuss detailed pricing options soon. If the person is not interested, thank them for their time and end the call politely. Here is some of the key information:",
+     "number": "{{3.number}}",
+     "leadinfo": {
+       "LeadName": "{{3.LeadName}}",
+       "CareReason": "{{3.CareReason}}",
+       "CareNeededFor": "{{3.CareNeededFor}}"
+     }
+   }
+   ```
+   - The dynamic variables (`{{3.number}}`, `{{3.LeadName}}`, `{{3.CareReason}}`, `{{3.CareNeededFor}}`) pull data from the OpenAI module's output.
 
+### Configuring ElevenLabs Conversational AI
+To set up and obtain the necessary configurations for ElevenLabs Conversational AI:
 
+1. **Create an ElevenLabs Account**
+   - Sign up at [ElevenLabs.io](https://elevenlabs.io) if you don’t already have an account.
+
+2. **Obtain API Key**
+   - Log in to your ElevenLabs dashboard.
+   - Navigate to the "API" or "Profile" section.
+   - Generate an API key. This is your `ELEVENLABS_API_KEY`. Keep it secure and do not share it publicly.
+
+3. **Create and Configure an Agent**
+   - Go to the "Conversational AI" section in the ElevenLabs dashboard.
+   - Create a new agent for your use case (e.g., a care coordinator like Heather).
+   - Configure the agent with:
+     - **Voice**: Select a voice that matches your desired tone (e.g., friendly and warm).
+     - **Prompt**: Define the initial prompt for the agent, such as:
+       ```
+       You are Heather, a friendly and warm care coordinator for First Light Home Care, a home healthcare company. You’re calling to follow up on care service inquiries with a calm and reassuring voice, using natural pauses to make the conversation feel more human-like. Your main goals are: 1. Verify the details submitted in the care request from the Point of Contact below for the 'Care Needed For'. 2. Show empathy for the care situation. 3. Confirm interest in receiving care services for the 'Care Needed For'. 4. Set expectations for next steps, which are to discuss with a care specialist. Use casual, friendly language, avoiding jargon and technical terms, to make the lead feel comfortable and understood. Listen carefully and address concerns with empathy, focusing on building rapport. If asked about pricing, explain that a care specialist will discuss detailed pricing options soon. If the person is not interested, thank them for their time and end the call politely.
+       ```
+     - **First Message**: Set an initial greeting, e.g., "Hi, is this [LeadName]? This is Heather from First Light Home Care. I understand you're looking for care for [CareNeededFor]. Is that correct?"
+   - Save the agent to generate an `ELEVENLABS_AGENT_ID`. This ID is used to identify your agent in API requests.
+
+4. **Test the Agent**
+   - Use the ElevenLabs API playground or make test API calls to ensure the agent responds as expected.
+   - Refer to the ElevenLabs documentation for detailed API endpoints and parameters: [ElevenLabs API Docs](https://elevenlabs.io/docs).
+
+### Inbound Calls
+Configure your Twilio number to handle incoming calls using a webhook:
+- In the Twilio Console, set the voice webhook URL to `https://elevenlabs-twilio-ai-caller-spicywalnut.replit.app/incoming-call`
+- This will forward incoming calls to the specified `SALES_TEAM_PHONE_NUMBER` as configured in your environment variables.
+
+## Project Structure
+```
+/elevenlabs-twilio-ai-caller
+├── forTheLegends/outbound/
+│   ├── outbound-authenticated.js    # Authenticated calls
+│   ├── outbound-custom-make.js     # Custom prompts from make.com
+│   ├── outbound-normal.js          # Basic unauthenticated calls
+│   └── outbound.custom-prompt.js   # Flexible prompt handling
+├── inbound-calls.js                # Inbound call routing
+├── outbound-calls.js               # Main outbound call logic
+├── index.js                        # Server entry point
+├── handoff.mp3                     # Audio for call transfers
+├── makePayload.txt                 # Sample make.com payload
+├── package.json                    # Dependencies
+├── .replit                         # Replit configuration
+└── replit.nix                      # Nix environment config
+```
+
+## Troubleshooting
+- **Call fails to initiate**: Check Twilio credentials and phone numbers
+- **No audio**: Verify ElevenLabs API key and agent ID
+- **WebSocket errors**: Ensure server is accessible and port is open
+- **Logs**: Check server logs for detailed error messages
+
+## Contributing
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
