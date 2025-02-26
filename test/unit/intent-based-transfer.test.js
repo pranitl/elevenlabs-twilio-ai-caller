@@ -9,29 +9,32 @@ jest.mock('twilio', () => {
   return jest.fn(() => mockTwilioClient());
 });
 
+// Create a mock for processTranscript that we can reference directly
+const mockProcessTranscript = jest.fn().mockImplementation((callSid, transcript) => {
+  // Different behavior based on transcript content
+  if (transcript.includes('more information') || transcript.includes('tell me more')) {
+    return { 
+      intentDetected: true, 
+      detectedIntents: ['needs_more_info'] 
+    };
+  } else if (transcript.includes('not interested')) {
+    return { 
+      intentDetected: true, 
+      detectedIntents: ['no_interest'] 
+    };
+  } else if (transcript.includes('immediate') || transcript.includes('right away')) {
+    return { 
+      intentDetected: true, 
+      detectedIntents: ['needs_immediate_care'] 
+    };
+  }
+  return { intentDetected: false, detectedIntents: [] };
+});
+
 jest.mock('../../forTheLegends/outbound/intent-detector.js', () => {
   return {
     initializeIntentDetection: jest.fn(),
-    processTranscript: jest.fn().mockImplementation((callSid, transcript) => {
-      // Different behavior based on transcript content
-      if (transcript.includes('more information') || transcript.includes('tell me more')) {
-        return { 
-          intentDetected: true, 
-          detectedIntents: ['needs_more_info'] 
-        };
-      } else if (transcript.includes('not interested')) {
-        return { 
-          intentDetected: true, 
-          detectedIntents: ['no_interest'] 
-        };
-      } else if (transcript.includes('immediate') || transcript.includes('right away')) {
-        return { 
-          intentDetected: true, 
-          detectedIntents: ['needs_immediate_care'] 
-        };
-      }
-      return { intentDetected: false, detectedIntents: [] };
-    }),
+    processTranscript: mockProcessTranscript,
     getIntentInstructions: jest.fn(),
     hasSchedulingIntent: jest.fn().mockImplementation((callSid) => {
       // Check if we're tracking this call with scheduling intent
@@ -53,6 +56,9 @@ jest.mock('../../forTheLegends/outbound/intent-detector.js', () => {
 
 // Import after mocking
 import { registerOutboundRoutes } from '../../outbound-calls.js';
+
+// Import the processTranscript directly to use in the test
+const { processTranscript, getIntentData } = jest.requireMock('../../forTheLegends/outbound/intent-detector.js');
 
 describe('Intent-Based Transfer Evaluation', () => {
   // Capture the checkAndTransfer function for testing
@@ -242,9 +248,6 @@ describe('Intent-Based Transfer Evaluation', () => {
   });
 
   it('should process transcript and update intent data', () => {
-    // Import the mocked intent functions
-    const { processTranscript, getIntentData } = require('../../forTheLegends/outbound/intent-detector.js');
-    
     // Set up call status
     const callSid = 'CALL123';
     global.callStatuses[callSid] = {
@@ -265,8 +268,8 @@ describe('Intent-Based Transfer Evaluation', () => {
     // Simulate transcript with intent
     const transcript = "Can you tell me more about your services?";
     
-    // Process transcript
-    const result = processTranscript(callSid, transcript, 'lead');
+    // Process transcript - ensuring arguments match the mock implementation
+    const result = mockProcessTranscript(callSid, transcript, 'lead');
     
     // Update call status with intent data (mimicking what happens in the real code)
     global.callStatuses[callSid].intentData = getIntentData(callSid);

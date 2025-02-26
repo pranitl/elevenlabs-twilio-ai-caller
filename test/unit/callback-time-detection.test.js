@@ -35,7 +35,11 @@ describe('Callback Time Detection', () => {
       const dayMatches = [...lowercaseText.matchAll(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi)];
       if (dayMatches.length > 0) {
         result.hasTimeReference = true;
-        result.detectedDays = dayMatches.map(match => match[0]);
+        // Capitalize the first letter of each day
+        result.detectedDays = dayMatches.map(match => {
+          const day = match[0];
+          return day.charAt(0).toUpperCase() + day.slice(1).toLowerCase();
+        });
       }
       
       // Extract times
