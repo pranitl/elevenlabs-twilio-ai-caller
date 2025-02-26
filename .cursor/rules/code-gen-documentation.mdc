@@ -1,0 +1,10 @@
+---
+description: When generating code relevant to Twilio or ElevenLabs, ensure its groudned in the documentation
+globs: 
+alwaysApply: false
+---
+
+# Your rule content
+
+- When you are generating any thing related to Twilio, ensure you reference the Twilio Docs and Twilio Voice Docs
+- When you are generating any thing related to ElevenLabs, ensure you reference the ElevenLabs Conversational AI Docs and the broader ElevenLabs API docs
