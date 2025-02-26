@@ -1,0 +1,13 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+
+# Test Driven Approach
+- When the user asks for a new feature or update, ensure we have written a Comprehensive test suite and also ensure that you follow a Test Driven Development (TDD) approach.
+- After the conclusion of a feature, ensure you update the readme file to keep the project current.
+
+# Test Debugging
+- If tests fail, ensure that we don't just patch up the test to pass it but are ignoring a potential issue in the actual code itself. This is counterproductive to what we need to do.
+

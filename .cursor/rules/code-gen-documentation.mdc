@@ -4,7 +4,7 @@ globs:
 alwaysApply: false
 ---
 
-# Your rule content
+# Using Exgternal Documentation
 
 - When you are generating any thing related to Twilio, ensure you reference the Twilio Docs and Twilio Voice Docs
 - When you are generating any thing related to ElevenLabs, ensure you reference the ElevenLabs Conversational AI Docs and the broader ElevenLabs API docs
