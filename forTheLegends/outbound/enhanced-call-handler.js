@@ -357,11 +357,79 @@ function cleanupCallResources(callSid, leadId) {
   // Will be cleaned up after max retries or successful completion
 }
 
+/**
+ * Register enhanced outbound routes with the Fastify instance
+ * Adds additional routes for enhanced calling features
+ * @param {Object} fastify - The Fastify instance
+ * @returns {Object} The Fastify instance with routes registered
+ */
+function registerEnhancedOutboundRoutes(fastify) {
+  console.log('Registering enhanced outbound routes');
+  
+  // Define enhanced routes here
+  fastify.post('/enhanced-outbound-call', async (request, reply) => {
+    const { number, leadinfo, prompt } = request.body;
+    
+    if (!number) {
+      return reply.code(400).send({ error: 'Phone number is required' });
+    }
+    
+    try {
+      // Generate a unique lead ID if not provided
+      const leadId = leadinfo?.LeadId || `lead-${Date.now()}`;
+      
+      // Initialize enhanced call state
+      enhancedCallStates[leadId] = {
+        leadId,
+        leadInfo: leadinfo || {},
+        status: 'initiating',
+        createdAt: new Date().toISOString(),
+        lastUpdatedAt: new Date().toISOString(),
+        enhancedActive: true
+      };
+      
+      // Track this call for potential retry
+      trackCall(leadId, null, leadinfo || {});
+      
+      // Return a response acknowledging the request
+      return { 
+        success: true, 
+        message: 'Enhanced outbound call initiated',
+        leadId
+      };
+    } catch (error) {
+      console.error('Error initiating enhanced outbound call:', error);
+      return reply.code(500).send({ 
+        error: 'Failed to initiate call',
+        message: error.message
+      });
+    }
+  });
+  
+  // Route to check call status
+  fastify.get('/enhanced-call-status/:leadId', async (request, reply) => {
+    const { leadId } = request.params;
+    
+    if (!leadId || !enhancedCallStates[leadId]) {
+      return reply.code(404).send({ error: 'Call not found' });
+    }
+    
+    return { 
+      leadId,
+      status: enhancedCallStates[leadId].status,
+      lastUpdatedAt: enhancedCallStates[leadId].lastUpdatedAt
+    };
+  });
+  
+  return fastify;
+}
+
 export {
   initialize,
   extendElevenLabsSetup,
   enhanceWebhookFunction,
   processAudio,
   processCallStatusUpdate,
-  enhancedCallStates
+  enhancedCallStates,
+  registerEnhancedOutboundRoutes
 }; 

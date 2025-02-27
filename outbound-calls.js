@@ -6,6 +6,7 @@ import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
 import twilio from "twilio";
 import dotenv from "dotenv";
+import { sendElevenLabsConversationData } from './forTheLegends/outbound/index.js';
 
 // Import intent detection functionality from existing file
 import {
@@ -963,9 +964,11 @@ export function registerOutboundRoutes(fastify) {
             elevenLabsWs.on("close", () => {
               console.log("[ElevenLabs] Disconnected");
               
-              // When WebSocket closes, check if we need to send data to make.com webhook
+              // When WebSocket closes, send data to webhook using our new common module
               if (callSid && conversationId) {
-                sendCallDataToWebhook(callSid, conversationId);
+                sendElevenLabsConversationData(callSid, conversationId, callStatuses, { 
+                  sourceModule: 'outbound-calls' 
+                });
               }
             });
           } catch (error) {
@@ -1133,135 +1136,6 @@ export function registerOutboundRoutes(fastify) {
     if (!result.hasTimeReference) return null;
     
     return result;
-  }
-
-  // Function to fetch conversation details from ElevenLabs and send to make.com webhook
-  async function sendCallDataToWebhook(callSid, conversationId) {
-    try {
-      console.log(`[Webhook] Preparing to send data for call ${callSid} with conversation ${conversationId}`);
-      
-      // Only proceed if this was a call where sales team was unavailable or it was a voicemail
-      if (!callStatuses[callSid]?.salesTeamUnavailable && !callStatuses[callSid]?.isVoicemail) {
-        console.log(`[Webhook] No need to send data for call ${callSid} - sales team handled the call`);
-        return;
-      }
-      
-      // Get conversation transcript and summary from ElevenLabs
-      let transcriptData = null;
-      let summaryData = null;
-      
-      // First try to get transcripts from our stored data
-      const storedTranscripts = callStatuses[callSid]?.transcripts || [];
-      
-      // If we have stored transcripts, use them
-      if (storedTranscripts.length > 0) {
-        transcriptData = {
-          conversation_id: conversationId,
-          transcripts: storedTranscripts
-        };
-      }
-      
-      // Otherwise, try to fetch from ElevenLabs API
-      if (!transcriptData) {
-        try {
-          console.log(`[ElevenLabs] Fetching transcript for conversation ${conversationId}`);
-          const transcriptResponse = await fetch(
-            `https://api.elevenlabs.io/v1/convai/conversation/${conversationId}/transcript`,
-            {
-              method: "GET",
-              headers: { "xi-api-key": ELEVENLABS_API_KEY },
-            }
-          );
-          
-          if (transcriptResponse.ok) {
-            transcriptData = await transcriptResponse.json();
-            console.log(`[ElevenLabs] Successfully fetched transcript for conversation ${conversationId}`);
-          } else {
-            console.error(`[ElevenLabs] Failed to fetch transcript: ${transcriptResponse.statusText}`);
-          }
-        } catch (error) {
-          console.error(`[ElevenLabs] Error fetching transcript: ${error.message}`);
-        }
-      }
-      
-      // Try to get summary from ElevenLabs API
-      try {
-        console.log(`[ElevenLabs] Fetching summary for conversation ${conversationId}`);
-        const summaryResponse = await fetch(
-          `https://api.elevenlabs.io/v1/convai/conversation/${conversationId}/summary`,
-          {
-            method: "GET",
-            headers: { "xi-api-key": ELEVENLABS_API_KEY },
-          }
-        );
-        
-        if (summaryResponse.ok) {
-          summaryData = await summaryResponse.json();
-          console.log(`[ElevenLabs] Successfully fetched summary for conversation ${conversationId}`);
-        } else {
-          console.error(`[ElevenLabs] Failed to fetch summary: ${summaryResponse.statusText}`);
-        }
-      } catch (error) {
-        console.error(`[ElevenLabs] Error fetching summary: ${error.message}`);
-      }
-      
-      // Prepare data for webhook
-      const webhookData = {
-        call_sid: callSid,
-        conversation_id: conversationId,
-        is_voicemail: callStatuses[callSid]?.isVoicemail || false,
-        sales_team_unavailable: callStatuses[callSid]?.salesTeamUnavailable || false,
-        lead_info: callStatuses[callSid]?.leadInfo || {},
-        transcript: transcriptData,
-        summary: summaryData,
-        // Add callback preferences if they exist
-        callbackPreferences: callStatuses[callSid]?.callbackPreferences || [],
-        timestamp: new Date().toISOString()
-      };
-      
-      // Schedule callback if we have preferences and sales team was unavailable
-      if (callStatuses[callSid]?.salesTeamUnavailable && 
-          callStatuses[callSid]?.callbackPreferences?.length > 0 &&
-          !callStatuses[callSid]?.callbackSchedulingAttempted) {
-        
-        callStatuses[callSid].callbackSchedulingAttempted = true;
-        
-        const leadId = callStatuses[callSid].leadInfo?.LeadId || callSid;
-        try {
-          const scheduleResult = await scheduleRetryCall(leadId);
-          console.log(`[Webhook] Callback scheduling result for ${callSid}:`, scheduleResult);
-          webhookData.callbackScheduled = scheduleResult.success;
-          webhookData.callbackDetails = scheduleResult;
-        } catch (error) {
-          console.error(`[Webhook] Error scheduling callback for ${callSid}:`, error);
-          webhookData.callbackScheduled = false;
-          webhookData.callbackError = error.message;
-        }
-      }
-      
-      // Send data to make.com webhook
-      console.log(`[Webhook] Sending data to make.com for call ${callSid}`);
-      try {
-        const webhookResponse = await fetch(
-          "https://hook.us2.make.com/5ir0yfumo72gh0i4ittsrnm3pav0v7bq",
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(webhookData),
-          }
-        );
-        
-        if (webhookResponse.ok) {
-          console.log(`[Webhook] Successfully sent data to make.com for call ${callSid}`);
-        } else {
-          console.error(`[Webhook] Failed to send data to make.com: ${webhookResponse.statusText}`);
-        }
-      } catch (error) {
-        console.error(`[Webhook] Error sending data to webhook: ${error.message}`);
-      }
-    } catch (error) {
-      console.error(`[Webhook] Unexpected error: ${error.message}`);
-    }
   }
 
   // Helper function to check transfer after intent detection

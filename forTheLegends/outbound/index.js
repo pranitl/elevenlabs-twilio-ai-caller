@@ -59,6 +59,12 @@ import {
   setWebhookUrl
 } from './webhook-enhancer.js';
 
+// Import new outbound webhook module
+import {
+  sendElevenLabsConversationData,
+  configureWebhook
+} from './outbound-webhook.js';
+
 export {
   // Integration with existing outbound-calls.js
   initIntegration,
@@ -108,5 +114,9 @@ export {
   // Webhook enhancement
   enhanceWebhookPayload,
   sendEnhancedWebhook,
-  setWebhookUrl
+  setWebhookUrl,
+  
+  // Outbound webhook for ElevenLabs conversations
+  sendElevenLabsConversationData,
+  configureWebhook
 }; 

@@ -4,6 +4,9 @@
  * Supports both production and testing environments
  */
 
+// Import webhook functionality
+import { sendElevenLabsConversationData } from './forTheLegends/outbound/index.js';
+
 // Constants for tracking call status
 const callStatuses = {};
 
@@ -91,8 +94,17 @@ function setupStreamingWebSocket(ws) {
   // Handle WebSocket close
   ws.on("close", () => {
     console.log("[Twilio] Client disconnected");
+    
+    // Close ElevenLabs connection if open
     if (elevenLabsWs?.readyState === 1) {
       elevenLabsWs.close();
+    }
+    
+    // Send webhook data if we have a conversation
+    if (callSid && conversationId) {
+      sendElevenLabsConversationData(callSid, conversationId, callStatuses, { 
+        sourceModule: 'streaming-websocket' 
+      });
     }
   });
   

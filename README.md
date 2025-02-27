@@ -10,6 +10,7 @@ This project integrates Twilio's telephony capabilities with ElevenLabs' convers
 - **Lead Management**: Handle lead data and context
 - **Sales Team Handoff**: Seamless transfer from AI to human agents
 - **WebSocket Support**: Real-time audio streaming
+- **Outbound Webhooks**: Send conversation transcripts and summaries to make.com
 
 ## Prerequisites
 - Node.js (v20 or higher)
@@ -41,6 +42,7 @@ TWILIO_AUTH_TOKEN=your_twilio_auth_token
 TWILIO_PHONE_NUMBER=+1xxxxxxxxxx
 SALES_TEAM_PHONE_NUMBER=+1xxxxxxxxxx
 PORT=8000
+MAKE_WEBHOOK_URL=your_make_webhook_url
 ```
 
 4. **Prepare Audio Files**
@@ -61,6 +63,7 @@ npm start
 | TWILIO_PHONE_NUMBER | Twilio source phone number | Yes |
 | SALES_TEAM_PHONE_NUMBER | Sales team destination number | Yes |
 | PORT | Server port (default: 8000) | No |
+| MAKE_WEBHOOK_URL | Make.com webhook URL | Yes |
 
 ## Usage
 
@@ -336,3 +339,45 @@ For detailed information on testing, see the [Testing Guide](test/README.md).
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
+
+## Outbound Webhook Integration
+
+The system sends conversation data to make.com after each ElevenLabs AI interaction. This allows for:
+
+1. Capturing full conversation transcripts and AI-generated summaries
+2. Tracking scheduling preferences expressed by leads
+3. Monitoring agent performance and conversation quality
+4. Improving lead follow-up processes
+
+### Webhook Payload
+
+The webhook sends a comprehensive payload containing:
+
+- Call information (Twilio SID, ElevenLabs conversation ID)
+- Lead data
+- Conversation transcript
+- AI-generated summary
+- Callback preferences (if detected)
+- Success criteria and data collection from ElevenLabs
+
+### Configuration
+
+Configure the webhook URL in your `.env` file:
+
+```
+MAKE_WEBHOOK_URL=https://hook.us2.make.com/your-endpoint-here
+```
+
+You can also configure webhook behavior programmatically:
+
+```javascript
+import { configureWebhook } from './forTheLegends/outbound/index.js';
+
+configureWebhook({
+  url: 'https://your-custom-webhook-url.com',
+  retryAttempts: 5,
+  retryDelayMs: 2000,
+  timeoutMs: 15000,
+  enabled: true
+});
+```
