@@ -9,6 +9,7 @@ import dotenv from "dotenv";
 import { sendElevenLabsConversationData } from './forTheLegends/outbound/index.js';
 import * as elevenLabsPrompts from './forTheLegends/prompts/elevenlabs-prompts.js';
 import * as webhookConfig from './forTheLegends/outbound/webhook-config.js';
+import { registerTwilioWebhookValidation } from './twilio-webhook-validation.js';
 
 // Import intent detection functionality from existing file
 import {
@@ -31,6 +32,12 @@ dotenv.config();
 
 // Store call statuses
 const callStatuses = {};
+
+// Define ALL possible status events for complete tracking
+const ALL_STATUS_EVENTS = [
+  'initiated', 'ringing', 'answered', 'completed', 
+  'busy', 'no-answer', 'canceled', 'failed'
+];
 
 // Store the most recent request host for use in callbacks
 let mostRecentHost = null;
@@ -145,37 +152,51 @@ function setupStreamingWebSocket(ws) {
   return ws;
 }
 
-export function registerOutboundRoutes(fastify) {
-  const {
-    ELEVENLABS_API_KEY,
-    ELEVENLABS_AGENT_ID,
-    TWILIO_ACCOUNT_SID,
-    TWILIO_AUTH_TOKEN,
-    TWILIO_PHONE_NUMBER,
-    SALES_TEAM_PHONE_NUMBER,
-  } = process.env;
+// Export the function for testing
+export async function registerOutboundRoutes(fastify) {
+  // Get environment variables
+  const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+  const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+  const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER;
+  const SALES_TEAM_PHONE_NUMBER = process.env.SALES_TEAM_PHONE_NUMBER;
+  const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
+  const ELEVENLABS_AGENT_ID = process.env.ELEVENLABS_AGENT_ID;
 
-  if (
-    !ELEVENLABS_API_KEY ||
-    !ELEVENLABS_AGENT_ID ||
-    !TWILIO_ACCOUNT_SID ||
-    !TWILIO_AUTH_TOKEN ||
-    !TWILIO_PHONE_NUMBER ||
-    !SALES_TEAM_PHONE_NUMBER
-  ) {
-    console.error("Missing required environment variables");
-    throw new Error("Missing required environment variables");
+  // Check if the required environment variables are set
+  if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_PHONE_NUMBER) {
+    console.error("Missing required environment variables for Twilio");
+    throw new Error("Missing required environment variables for Twilio");
   }
 
-  const twilioClient = new Twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+  if (!SALES_TEAM_PHONE_NUMBER) {
+    console.error("Missing SALES_TEAM_PHONE_NUMBER environment variable");
+    throw new Error("Missing SALES_TEAM_PHONE_NUMBER environment variable");
+  }
+
+  if (!ELEVENLABS_API_KEY || !ELEVENLABS_AGENT_ID) {
+    console.error("Missing required ElevenLabs environment variables");
+    throw new Error("Missing required ElevenLabs environment variables");
+  }
+
+  // Initialize the Twilio client
+  const twilioClient = Twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 
   // Middleware to track the most recent host
-  fastify.addHook('onRequest', (request, reply, done) => {
-    if (request.headers.host) {
-      mostRecentHost = request.headers.host;
-      console.log(`Updated most recent host: ${mostRecentHost}`);
-    }
+  fastify.addHook("preHandler", (request, reply, done) => {
+    mostRecentHost = request.headers.host;
     done();
+  });
+
+  // Register Twilio webhook validation for all Twilio webhook routes
+  registerTwilioWebhookValidation(fastify, [
+    '/lead-status',
+    '/sales-status',
+    '/amd-callback',
+    '/outbound-call-twiml',
+    '/sales-team-twiml'
+  ], {
+    // Skip validation in test mode
+    enforce: process.env.NODE_ENV === 'production'
   });
 
   // Add a route to serve the handoff.mp3 file directly
@@ -188,6 +209,7 @@ export function registerOutboundRoutes(fastify) {
     makeWebhookUrl: process.env.MAKE_WEBHOOK_URL
   });
 
+  // Helper function to get signed URL
   async function getSignedUrl() {
     try {
       const response = await fetch(
@@ -223,7 +245,7 @@ export function registerOutboundRoutes(fastify) {
         to: number,
         url: `https://${request.headers.host}/outbound-call-twiml?prompt=${encodeURIComponent(prompt || "")}&leadName=${encodeURIComponent(leadinfo?.LeadName || "")}&careReason=${encodeURIComponent(leadinfo?.CareReason || "")}&careNeededFor=${encodeURIComponent(leadinfo?.CareNeededFor || "")}`,
         statusCallback: `https://${request.headers.host}/lead-status`,
-        statusCallbackEvent: ["initiated", "answered", "completed"],
+        statusCallbackEvent: ALL_STATUS_EVENTS, // Track all possible call status events
         machineDetection: "DetectMessageEnd",
         asyncAmd: true,
         asyncAmdStatusCallback: `https://${request.headers.host}/amd-callback`,
@@ -234,16 +256,21 @@ export function registerOutboundRoutes(fastify) {
         to: SALES_TEAM_PHONE_NUMBER,
         url: `https://${request.headers.host}/sales-team-twiml?leadName=${encodeURIComponent(leadinfo?.LeadName || "")}&careReason=${encodeURIComponent(leadinfo?.CareReason || "")}&careNeededFor=${encodeURIComponent(leadinfo?.CareNeededFor || "")}`,
         statusCallback: `https://${request.headers.host}/sales-status`,
-        statusCallbackEvent: ["initiated", "answered", "completed"],
+        statusCallbackEvent: ALL_STATUS_EVENTS, // Track all possible call status events
       });
 
       callStatuses[leadCall.sid] = {
         leadStatus: "initiated",
         salesCallSid: salesCall.sid,
+        leadInfo: leadinfo || {},
+        timestamp: new Date().toISOString(),
       };
+      
       callStatuses[salesCall.sid] = {
         salesStatus: "initiated",
         leadCallSid: leadCall.sid,
+        leadInfo: leadinfo || {},
+        timestamp: new Date().toISOString(),
       };
 
       console.log("Initiating sales call to:", SALES_TEAM_PHONE_NUMBER);
@@ -251,16 +278,13 @@ export function registerOutboundRoutes(fastify) {
       console.log("Sales call SID:", salesCall.sid);
 
       reply.send({
-        success: true,
-        message: "Calls initiated",
         leadCallSid: leadCall.sid,
         salesCallSid: salesCall.sid,
+        status: "initiated",
       });
     } catch (error) {
       console.error("Error initiating calls:", error);
-      reply
-        .code(500)
-        .send({ success: false, error: "Failed to initiate calls" });
+      reply.code(500).send({ error: "Failed to initiate calls", details: error.message });
     }
   });
 
@@ -303,33 +327,48 @@ export function registerOutboundRoutes(fastify) {
     reply.type("text/xml").send(twimlResponse);
   });
 
-  // Status callback for lead
+  // Handle lead call status updates
   fastify.post("/lead-status", async (request, reply) => {
     const { CallSid, CallStatus } = request.body;
-    if (callStatuses[CallSid]) {
+    console.log(`Lead call ${CallSid} status: ${CallStatus}`);
+
+    if (!callStatuses[CallSid]) {
+      callStatuses[CallSid] = {
+        leadStatus: CallStatus,
+        timestamp: new Date().toISOString()
+      };
+    } else {
       const previousStatus = callStatuses[CallSid].leadStatus;
-      callStatuses[CallSid].leadStatus = CallStatus.toLowerCase();
-      console.log(`Lead status updated: ${CallSid} - ${CallStatus}`);
+      callStatuses[CallSid].leadStatus = CallStatus;
+      callStatuses[CallSid].lastUpdateTime = new Date().toISOString();
       
       // Lead call is now in progress - ElevenLabs should connect
-      if (previousStatus !== "in-progress" && CallStatus.toLowerCase() === "in-progress") {
+      if (previousStatus !== "in-progress" && CallStatus === "in-progress") {
         console.log(`Lead call ${CallSid} is now active. ElevenLabs should connect via /outbound-media-stream.`);
         // Check if we can transfer to sales (if they're already on the line)
         await checkAndTransfer(CallSid);
       }
+    }
+
+    // Log all call details in debug mode
+    console.log(`Call Status Update - Lead Call ${CallSid}:`);
+    console.log(JSON.stringify(callStatuses[CallSid], null, 2));
+
+    // Handle call completion
+    if (CallStatus === "completed" || CallStatus === "busy" || 
+        CallStatus === "no-answer" || CallStatus === "failed" || 
+        CallStatus === "canceled") {
+      console.log(`Lead call ${CallSid} ended with status: ${CallStatus}`);
       
-      // If call ended and we haven't completed the transfer, clean up
-      if (
-        (CallStatus.toLowerCase() === "completed" || 
-         CallStatus.toLowerCase() === "busy" || 
-         CallStatus.toLowerCase() === "failed" || 
-         CallStatus.toLowerCase() === "no-answer") && 
-        !callStatuses[CallSid].transferComplete
-      ) {
+      // Record the final call outcome
+      callStatuses[CallSid].finalStatus = CallStatus;
+      callStatuses[CallSid].endTime = new Date().toISOString();
+      
+      // End the corresponding sales call if it's still in progress
+      if (!callStatuses[CallSid].transferComplete) {
         const salesCallSid = callStatuses[CallSid].salesCallSid;
         console.log(`Lead call ${CallSid} ended before transfer completed. Ending related sales call ${salesCallSid}`);
         
-        // End the corresponding sales call if it's still in progress
         if (salesCallSid && callStatuses[salesCallSid]?.salesStatus === "in-progress") {
           try {
             await twilioClient.calls(salesCallSid).update({ status: "completed" });
@@ -338,8 +377,16 @@ export function registerOutboundRoutes(fastify) {
           }
         }
       }
+      
+      // Check if we should schedule a callback based on detected intents
+      const intentData = getIntentData(CallSid);
+      if (intentData && intentData.hasSchedulingIntent) {
+        console.log(`Scheduling callback for lead call ${CallSid} based on intent`);
+        // Logic for scheduling a callback would go here
+      }
     }
-    reply.send();
+
+    reply.send({ success: true });
   });
 
   // AMD (Answering Machine Detection) callback
@@ -396,23 +443,44 @@ export function registerOutboundRoutes(fastify) {
     reply.send();
   });
 
-  // Status callback for sales team
+  // Handle sales team call status updates
   fastify.post("/sales-status", async (request, reply) => {
     const { CallSid, CallStatus } = request.body;
-    if (callStatuses[CallSid]) {
+    console.log(`Sales call ${CallSid} status: ${CallStatus}`);
+
+    if (!callStatuses[CallSid]) {
+      callStatuses[CallSid] = {
+        salesStatus: CallStatus,
+        timestamp: new Date().toISOString()
+      };
+    } else {
       const previousStatus = callStatuses[CallSid].salesStatus;
-      callStatuses[CallSid].salesStatus = CallStatus.toLowerCase();
-      console.log(`Sales status updated: ${CallSid} - ${CallStatus}`);
+      callStatuses[CallSid].salesStatus = CallStatus;
+      callStatuses[CallSid].lastUpdateTime = new Date().toISOString();
       
-      // If call ended and we haven't completed the transfer, clean up
-      if (
-        (CallStatus.toLowerCase() === "completed" || 
-         CallStatus.toLowerCase() === "busy" || 
-         CallStatus.toLowerCase() === "failed" || 
-         CallStatus.toLowerCase() === "no-answer" ||
-         CallStatus.toLowerCase() === "canceled") && 
-        !callStatuses[CallSid].transferComplete
-      ) {
+      // Sales call just became in-progress, check if we can transfer
+      if (previousStatus !== "in-progress" && CallStatus === "in-progress") {
+        const leadCallSid = callStatuses[CallSid].leadCallSid;
+        await checkAndTransfer(leadCallSid);
+      }
+    }
+    
+    // Log all call details in debug mode
+    console.log(`Call Status Update - Sales Call ${CallSid}:`);
+    console.log(JSON.stringify(callStatuses[CallSid], null, 2));
+
+    // Handle call completion
+    if (CallStatus === "completed" || CallStatus === "busy" || 
+        CallStatus === "no-answer" || CallStatus === "failed" || 
+        CallStatus === "canceled") {
+      console.log(`Sales call ${CallSid} ended with status: ${CallStatus}`);
+      
+      // Record the final call outcome
+      callStatuses[CallSid].finalStatus = CallStatus;
+      callStatuses[CallSid].endTime = new Date().toISOString();
+      
+      // Handle sales team unavailability if no transfer was completed
+      if (!callStatuses[CallSid].transferComplete) {
         const leadCallSid = callStatuses[CallSid].leadCallSid;
         console.log(`Sales call ${CallSid} ended before transfer completed. Continuing with AI handling lead call ${leadCallSid}`);
         
@@ -420,17 +488,11 @@ export function registerOutboundRoutes(fastify) {
         if (leadCallSid && callStatuses[leadCallSid]?.leadStatus === "in-progress") {
           callStatuses[leadCallSid].salesTeamUnavailable = true;
           console.log(`[Sales] Team unavailable for call ${leadCallSid}, instructing AI to handle the conversation`);
-          
-          // Check if ElevenLabs connection is active to send instruction
-          // This will be handled when processing the next media event in the WebSocket connection
         }
-      } else if (previousStatus !== "in-progress" && CallStatus.toLowerCase() === "in-progress") {
-        // Call just became in-progress, check if we can transfer
-        const leadCallSid = callStatuses[CallSid].leadCallSid;
-        await checkAndTransfer(leadCallSid);
       }
     }
-    reply.send();
+
+    reply.send({ success: true });
   });
 
   // Check and transfer when both are ready
@@ -479,9 +541,10 @@ export function registerOutboundRoutes(fastify) {
         if (!callStatuses[leadCallSid].conference) {
           callStatuses[leadCallSid].conference = {
             room: conferenceRoom,
+            transferStartTime: Date.now(),
             leadJoined: false,
             salesJoined: false,
-            transferStartTime: Date.now()
+            handoffAudioPlayed: false  // Track if handoff audio has been played
           };
         }
         
@@ -1116,22 +1179,24 @@ export function registerOutboundRoutes(fastify) {
 
   // Route to handle conference status callbacks
   fastify.post("/conference-status", async (request, reply) => {
-    const params = request.body;
-    const conferenceSid = params.ConferenceSid;
-    const conferenceStatus = params.StatusCallbackEvent;
-    const callSid = params.CallSid;
-    
-    console.log(`[Conference ${conferenceSid}] Status update: ${conferenceStatus} for call ${callSid}`);
-    
-    // Find which call this is (lead or sales) by checking all active calls
-    let leadCallSid = null;
-    let salesCallSid = null;
-    
-    Object.keys(callStatuses).forEach(sid => {
-      if (callStatuses[sid].conference?.room === params.FriendlyName) {
+    try {
+      const params = request.body;
+      const conferenceSid = params.ConferenceSid;
+      const conferenceStatus = params.StatusCallbackEvent;
+      const callSid = params.CallSid;
+      
+      console.log(`[Conference ${conferenceSid}] Status update: ${conferenceStatus} for call ${callSid}`);
+      
+      // Find which call this belongs to
+      const sid = Object.keys(callStatuses).find(sid => {
+        // Check if this is the lead or sales call
+        return (sid === callSid || callStatuses[sid].salesCallSid === callSid) && 
+          callStatuses[sid].conference?.room === params.FriendlyName;
+      });
+      
+      if (sid) {
         if (sid === callSid) {
           // This is the lead call
-          leadCallSid = sid;
           if (conferenceStatus === 'participant-join') {
             callStatuses[sid].conference.leadJoined = true;
             console.log(`[Conference] Lead ${sid} joined the conference`);
@@ -1139,31 +1204,50 @@ export function registerOutboundRoutes(fastify) {
             callStatuses[sid].conference.leadJoined = false;
             console.log(`[Conference] Lead ${sid} left the conference`);
           }
-        } else if (callStatuses[sid].salesCallSid === callSid) {
+        } else {
           // This is the sales call
-          salesCallSid = sid;
           if (conferenceStatus === 'participant-join') {
             callStatuses[sid].conference.salesJoined = true;
             console.log(`[Conference] Sales ${callStatuses[sid].salesCallSid} joined the conference`);
+            
+            // Check if we should play handoff audio
+            if (
+              callStatuses[sid].conference.leadJoined && 
+              !callStatuses[sid].conference.handoffAudioPlayed
+            ) {
+              console.log(`[Conference] Playing handoff audio for lead ${sid}`);
+              
+              // Play handoff audio to the lead
+              const client = new Twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+              await client.calls.update(sid, {
+                twiml: `
+                  <Response>
+                    <Play>handoff.mp3</Play>
+                    <Redirect method="POST">/sales-team-twiml</Redirect>
+                  </Response>
+                `
+              });
+              
+              // Mark handoff audio as played
+              callStatuses[sid].conference.handoffAudioPlayed = true;
+            }
           } else if (conferenceStatus === 'participant-leave') {
             callStatuses[sid].conference.salesJoined = false;
             console.log(`[Conference] Sales ${callStatuses[sid].salesCallSid} left the conference`);
           }
         }
         
-        // If both parties have joined, mark transfer as complete
+        // Log when both parties are connected
         if (callStatuses[sid].conference.leadJoined && callStatuses[sid].conference.salesJoined) {
           console.log(`[Conference] Both parties joined the conference - transfer successful!`);
-          callStatuses[sid].transferComplete = true;
-          if (callStatuses[sid].salesCallSid) {
-            callStatuses[callStatuses[sid].salesCallSid].transferComplete = true;
-          }
         }
       }
-    });
-    
-    // Return a 200 response to Twilio
-    reply.status(200).send({ success: true });
+      
+      reply.code(200).send({ status: 'processed' });
+    } catch (error) {
+      console.error(`[Conference] Error processing status callback:`, error);
+      reply.code(500).send({ error: 'Error processing conference status' });
+    }
   });
   
   // Function to check if both parties successfully connected to the conference

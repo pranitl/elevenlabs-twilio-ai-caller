@@ -11,6 +11,7 @@ This project integrates Twilio's telephony capabilities with ElevenLabs' convers
 - **Sales Team Handoff**: Seamless transfer from AI to human agents
 - **WebSocket Support**: Real-time audio streaming
 - **Outbound Webhooks**: Send conversation transcripts and summaries to make.com
+- **Intent Detection**: Centralized system for detecting and responding to caller intents
 
 ## Prerequisites
 - Node.js (v20 or higher)
@@ -156,7 +157,12 @@ Configure your Twilio number to handle incoming calls using a webhook:
 │   ├── outbound-authenticated.js    # Authenticated calls
 │   ├── outbound-custom-make.js     # Custom prompts from make.com
 │   ├── outbound-normal.js          # Basic unauthenticated calls
-│   └── outbound.custom-prompt.js   # Flexible prompt handling
+│   ├── outbound.custom-prompt.js   # Flexible prompt handling
+│   ├── intent-constants.js         # Centralized intent categories and patterns
+│   ├── intent-detector.js          # Intent detection and processing logic
+│   └── webhook-config.js           # Centralized webhook configuration
+├── forTheLegends/prompts/
+│   └── elevenlabs-prompts.js       # Centralized prompts and configurations
 ├── inbound-calls.js                # Inbound call routing
 ├── outbound-calls.js               # Main outbound call logic
 ├── index.js                        # Server entry point
@@ -299,6 +305,19 @@ flowchart TD
    - Data is sent to a webhook for integration with CRM systems
    - Call resources are cleaned up
 
+8. **Intent Detection Flow**
+   - During conversations, the system continuously analyzes lead transcripts for intent patterns
+   - The centralized intent detection system identifies intents such as:
+     - Needs immediate care
+     - Scheduling callback requests
+     - Showing interest or disinterest
+     - Cannot talk now
+     - Already has care
+   - When intents are detected, the AI receives specific instructions on how to respond
+   - High-priority intents (like "needs immediate care") can trigger immediate actions
+   - Multiple intent tracking allows for nuanced conversation understanding
+   - Intent data is included in webhook payloads for CRM integration
+
 ## Troubleshooting
 - **Call fails to initiate**: Check Twilio credentials and phone numbers
 - **No audio**: Verify ElevenLabs API key and agent ID
@@ -381,3 +400,29 @@ configureWebhook({
   enabled: true
 });
 ```
+
+## Code Centralization
+
+The system has been designed with a focus on maintainability through centralization of key components:
+
+1. **Prompt Management**
+   - All ElevenLabs prompts are centralized in `forTheLegends/prompts/elevenlabs-prompts.js`
+   - Dynamic variable interpolation for personalized conversations
+   - Supports both standard calls and voicemail scenarios
+
+2. **Webhook Configuration**
+   - Make.com webhook URLs are managed in `forTheLegends/outbound/webhook-config.js`
+   - Context-aware webhooks (main, callback, voicemail)
+   - Configurable retry and timeout settings
+
+3. **Intent Detection**
+   - Intent patterns and categories are defined in `forTheLegends/outbound/intent-constants.js`
+   - Organized by intent type with priority levels and instruction sets
+   - Supported by comprehensive processing logic in `intent-detector.js`
+   - Extensible design for adding new intent types
+
+This centralization approach improves:
+- Code maintainability and readability
+- Testing and validation
+- Ease of updates and extensions
+- Configuration management across environments

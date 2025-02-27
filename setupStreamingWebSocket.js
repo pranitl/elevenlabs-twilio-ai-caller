@@ -7,9 +7,16 @@
 // Import webhook functionality
 import { sendElevenLabsConversationData } from './forTheLegends/outbound/index.js';
 import * as elevenLabsPrompts from './forTheLegends/prompts/elevenlabs-prompts.js';
+import { getElevenLabsSuccessCriteria, processElevenLabsSuccessCriteria } from './forTheLegends/outbound/intent-detector.js';
+import WebSocket from "ws";
 
 // Constants for tracking call status
 const callStatuses = {};
+
+// Expose the processElevenLabsSuccessCriteria function globally for testing
+if (typeof global !== 'undefined') {
+  global.processElevenLabsSuccessCriteria = processElevenLabsSuccessCriteria;
+}
 
 /**
  * Sets up a WebSocket connection for streaming audio between Twilio and ElevenLabs
@@ -24,6 +31,11 @@ function setupStreamingWebSocket(ws) {
   let elevenLabsWs = null;
   let customParameters = null;
   let conversationId = null;
+
+  // Store call parameters
+  const callParams = {
+    promptOverride: null
+  };
 
   // Handle errors
   ws.on("error", console.error);
@@ -60,7 +72,7 @@ function setupStreamingWebSocket(ws) {
             console.log('[ElevenLabs] WebSocket created:', elevenLabsWs);
             
             // Set up event handlers for the ElevenLabs WebSocket
-            // This part would be implemented in production code
+            setupElevenLabsConnection(elevenLabsWs, callSid, customParameters);
           } catch (error) {
             console.error('[ElevenLabs] Error creating WebSocket:', error);
           }
@@ -108,8 +120,82 @@ function setupStreamingWebSocket(ws) {
       });
     }
   });
-  
+
   return ws;
+}
+
+/**
+ * Set up event handlers for the ElevenLabs WebSocket
+ * @param {WebSocket} elevenLabsWs - The ElevenLabs WebSocket connection
+ * @param {string} callSid - The Twilio call SID
+ * @param {Object} customParameters - Custom parameters from the Twilio call
+ */
+function setupElevenLabsConnection(elevenLabsWs, callSid, customParameters) {
+  let conversationId = null;
+  
+  elevenLabsWs.on("open", () => {
+    console.log('[ElevenLabs] WebSocket connection opened');
+    
+    // Get the initialization configuration
+    let initConfig = getInitializationMessage(customParameters);
+    
+    // Add success criteria to the configuration
+    if (initConfig && initConfig.conversation_config_override) {
+      initConfig.conversation_config_override.successCriteria = getElevenLabsSuccessCriteria();
+    }
+    
+    console.log('[ElevenLabs] Sending initialization with success criteria:', 
+      JSON.stringify(initConfig.conversation_config_override.successCriteria));
+    
+    // Send the configuration to ElevenLabs
+    elevenLabsWs.send(JSON.stringify(initConfig));
+  });
+  
+  elevenLabsWs.on("message", (data) => {
+    try {
+      const message = JSON.parse(data);
+      
+      // Store conversation ID when available
+      if (message.conversation_id && !conversationId) {
+        conversationId = message.conversation_id;
+        console.log(`[ElevenLabs] Got conversation ID ${conversationId} for call ${callSid}`);
+        
+        if (callSid) {
+          callStatuses[callSid].conversationId = conversationId;
+        }
+      }
+      
+      // Handle success criteria results
+      if (message.type === "success_criteria_results" && callSid) {
+        console.log(`[ElevenLabs] Received success criteria results for call ${callSid}:`, message);
+        processElevenLabsSuccessCriteria(callSid, message);
+      }
+      
+      // Forward audio from ElevenLabs to Twilio
+      if (message.type === "audio" && callSid && callStatuses[callSid]?.streamSid) {
+        const streamSid = callStatuses[callSid].streamSid;
+        console.log(`[ElevenLabs] Sending AI audio to call ${callSid}`);
+        const audioData = {
+          event: "media",
+          streamSid,
+          media: {
+            payload: message.audio?.chunk || message.audio_event?.audio_base_64,
+          },
+        };
+        ws.send(JSON.stringify(audioData));
+      }
+    } catch (error) {
+      console.error("[ElevenLabs] Error processing message:", error);
+    }
+  });
+  
+  elevenLabsWs.on("error", (error) => {
+    console.error("[ElevenLabs] WebSocket error:", error);
+  });
+  
+  elevenLabsWs.on("close", () => {
+    console.log("[ElevenLabs] WebSocket closed");
+  });
 }
 
 /**
@@ -126,9 +212,9 @@ function getInitializationMessage(customParameters) {
 }
 
 // Export for ES modules
-export { setupStreamingWebSocket, callStatuses, getInitializationMessage };
+export { setupStreamingWebSocket, callStatuses, getInitializationMessage, setupElevenLabsConnection };
 
 // Support CommonJS for compatibility with tests
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { setupStreamingWebSocket, callStatuses, getInitializationMessage };
+  module.exports = { setupStreamingWebSocket, callStatuses, getInitializationMessage, setupElevenLabsConnection };
 } 

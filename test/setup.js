@@ -42,6 +42,20 @@ global.testCallbacks = {
   twilioAmdCallback: null
 };
 
+// Global call statuses for testing
+global.callStatuses = {};
+
+// Function to reset call statuses between tests
+global.resetCallStatuses = () => {
+  global.callStatuses = {};
+};
+
+// Mock function to process ElevenLabs success criteria
+global.processElevenLabsSuccessCriteria = jest.fn((callSid, criteriaResults) => {
+  // This will be implemented in the actual code, this is just a mock for testing
+  console.log(`[Test] Processing ElevenLabs success criteria for call ${callSid}:`, criteriaResults);
+});
+
 // Add any additional environment variables needed
 process.env.PORT = '8001';
 

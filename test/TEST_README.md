@@ -1,4 +1,4 @@
- # Comprehensive Testing Guide for ElevenLabs-Twilio AI Caller
+# Comprehensive Testing Guide for ElevenLabs-Twilio AI Caller
 
 This guide provides detailed information on how to test the ElevenLabs-Twilio AI Caller application. It is designed for all experience levels, from beginners to advanced users, with extremely granular details about our testing infrastructure.
 
@@ -17,6 +17,7 @@ This guide provides detailed information on how to test the ElevenLabs-Twilio AI
    - [WebSocket Mock](#websocket-mock)
    - [Fastify Mock](#fastify-mock)
    - [Express Mock](#express-mock)
+   - [Intent Mock](#intent-mock)
 5. [Unit Tests](#unit-tests)
    - [Inbound Calls](#inbound-calls)
    - [Outbound Calls](#outbound-calls)
@@ -26,6 +27,7 @@ This guide provides detailed information on how to test the ElevenLabs-Twilio AI
    - [ElevenLabs Integration](#elevenlabs-integration)
    - [Webhook Data Handling](#webhook-data-handling)
    - [Intent-Based Features](#intent-based-features)
+   - [Intent Detection](#intent-detection)
    - [Conference Monitoring](#conference-monitoring)
 6. [Integration Tests](#integration-tests)
    - [Server Integration](#server-integration)
@@ -43,6 +45,8 @@ This guide provides detailed information on how to test the ElevenLabs-Twilio AI
    - [Common Issues](#common-issues)
    - [Debugging Strategies](#debugging-strategies)
 10. [Best Practices](#best-practices)
+    - [General Testing](#general-testing)
+    - [Intent Detection Testing](#intent-detection-testing)
 11. [Glossary of Testing Terms](#glossary-of-testing-terms)
 
 ## Introduction to Testing
@@ -74,6 +78,11 @@ test/
 │   ├── make-mock.js         # Make.com webhook interactions mock
 │   ├── websocket-mock.js    # WebSocket connection and events mock
 │   └── ...                  # Other specialized mocks
+├── unit/                    # Unit tests for individual components
+│   ├── intent-constants.test.js   # Tests for intent constant definitions
+│   ├── intent-detector.test.js    # Tests for intent detection logic
+│   └── ...                  # Other unit tests
+├── integration/             # Integration tests for combined components
 ├── outbound-calls.test.js   # Tests for outbound calling functionality  
 ├── inbound-calls.test.js    # Tests for inbound call routing
 └── ...                      # Additional test files
@@ -397,6 +406,40 @@ expect(reply.send).toHaveBeenCalledWith(
 );
 ```
 
+### Intent Mock
+
+**File: `test/mocks/intent-mock.js`**
+
+Our intent detection mock provides tools for testing the intent detection system:
+
+- **Transcript Simulation**: Generates specific transcripts to trigger intent detection
+- **Intent State Inspection**: Allows verification of detected intents
+- **Configurable Detection**: Supports customizing intent detection behavior
+- **Pattern Testing**: Utilities for testing pattern matching accuracy
+
+Key features:
+
+```javascript
+// Import the mock
+import { simulateTranscript, getDetectedIntents, resetIntentState } from '../mocks/intent-mock.js';
+
+// Before each test, reset the state
+beforeEach(() => {
+  resetIntentState();
+});
+
+// Simulate a transcript that should trigger an intent
+const result = simulateTranscript('CA12345', 'I need urgent help immediately', 'lead');
+
+// Verify the correct intent was detected
+expect(result.intentDetected).toBe(true);
+expect(result.primaryIntent).toBe('needs_immediate_care');
+
+// Check the intent state was properly updated
+const intents = getDetectedIntents('CA12345');
+expect(intents).toContain('needs_immediate_care');
+```
+
 ## Unit Tests
 
 Our unit tests provide focused testing of individual components. The key test files include:
@@ -470,6 +513,147 @@ test('should connect to AI assistant when caller presses 2', async () => {
 - **WebSocket Communication**: Verifies real-time communication with Twilio and ElevenLabs
 - **Intent-Based Features**: Tests callback scheduling and transfer triggers
 - **Conference Monitoring**: Verifies tracking of conference participants and status
+
+### Intent-Based Features
+
+**File: `test/unit/intent-based-*.test.js`**
+
+Tests for intent-driven features, including:
+
+- **Callback Scheduling**: Tests for detecting and handling callback requests
+- **Lead Transfers**: Tests for transferring leads based on intent
+- **Negative Response Handling**: Tests for handling disinterest or rejection
+- **Additional Information Requests**: Tests for providing more details when requested
+
+Example test case:
+
+```javascript
+test('should schedule a callback when intent is detected', async () => {
+  // Setup call state
+  // ...
+  
+  // Simulate intent detection
+  const transcript = 'Please call me back tomorrow afternoon';
+  processTranscript(callSid, transcript, 'lead');
+  
+  // Verify callback scheduling
+  expect(hasSchedulingIntent(callSid)).toBe(true);
+  
+  // Check webhook includes callback data
+  expect(webhookStore.sent.some(call => 
+    call.data && 
+    call.data.callback_requested === true &&
+    call.data.callback_time.includes('tomorrow afternoon')
+  )).toBe(true);
+});
+```
+
+### Intent Detection
+
+**Files:**
+- `test/unit/intent-constants.test.js`
+- `test/unit/intent-detector.test.js`
+- `test/unit/intent-detection-processing.test.js`
+
+Our intent detection tests provide comprehensive coverage of the intent detection system:
+
+**Intent Constants Tests**:
+- **Pattern Definition**: Verifies all intent patterns are properly defined as regular expressions
+- **Intent Categories**: Tests that all intent categories have the required properties
+- **Priority Testing**: Verifies that intent priorities are correctly assigned
+- **Collection Integrity**: Ensures that all intents are properly categorized (positive, negative, neutral)
+
+Example test case:
+
+```javascript
+test('should detect patterns correctly for each intent', () => {
+  // Test SCHEDULE_CALLBACK intent patterns
+  const callbackPhrases = [
+    'Can you call me back tomorrow?',
+    'I'd prefer to talk later',
+    'Please call me in the afternoon',
+    'Schedule a call for next week'
+  ];
+  
+  callbackPhrases.forEach(phrase => {
+    let matched = false;
+    SCHEDULE_CALLBACK.patterns.forEach(pattern => {
+      if (pattern.test(phrase)) {
+        matched = true;
+      }
+    });
+    expect(matched).toBe(true);
+  });
+});
+```
+
+**Intent Detector Tests**:
+- **Initialization**: Tests for proper setup of intent detection state
+- **Transcript Processing**: Verifies detection of intents from transcripts
+- **Priority Handling**: Tests that higher priority intents take precedence
+- **Multiple Intent Detection**: Verifies handling of multiple detected intents
+- **Instruction Retrieval**: Tests the retrieval of handling instructions
+- **Intent State Management**: Verifies the maintenance and clearing of intent state
+
+Example test case:
+
+```javascript
+test('should correctly assign primary intent based on priority', () => {
+  // Process transcript with multiple intents
+  // Lower priority intent
+  processTranscript(TEST_CALL_SID, 'I need more information about your services', 'lead');
+  
+  // Higher priority intent
+  const result = processTranscript(
+    TEST_CALL_SID, 
+    'Actually, this is urgent and I need help immediately', 
+    'lead'
+  );
+  
+  // Higher priority intent should become primary
+  expect(result.primaryIntent).toBe('needs_immediate_care');
+  
+  // Get intent data and verify primary intent
+  const intentData = getIntentData(TEST_CALL_SID);
+  expect(intentData.primaryIntent.name).toBe('needs_immediate_care');
+  
+  // Both intents should be in detected intents
+  const detectedIntentNames = intentData.detectedIntents.map(i => i.name);
+  expect(detectedIntentNames).toContain('needs_more_info');
+  expect(detectedIntentNames).toContain('needs_immediate_care');
+});
+```
+
+**Intent Detection Processing Tests**:
+- **End-to-End Flow**: Tests the complete intent detection workflow
+- **Integration with AI**: Verifies that AI instructions change based on detected intents
+- **Confidence Scoring**: Tests the calculation and application of confidence scores
+- **Ambiguity Handling**: Verifies detection and handling of ambiguous intents
+- **Edge Cases**: Tests behavior with empty or unclear transcripts
+
+Example test case:
+
+```javascript
+test('should update AI instructions when intent is detected', () => {
+  // Setup test state and mock functions
+  const mockSendToAI = jest.fn();
+  
+  // Process a transcript with clear intent
+  const transcript = 'I'm not interested in your services';
+  const result = processTranscript('CA12345', transcript, 'lead');
+  
+  // Get the instructions for the AI
+  const instructions = getIntentInstructions('CA12345');
+  
+  // Send instructions to AI
+  mockSendToAI(instructions);
+  
+  // Verify the right instructions were sent
+  expect(mockSendToAI).toHaveBeenCalledWith(
+    expect.stringContaining('User has expressed no interest')
+  );
+});
+```
 
 ## Running Tests
 
@@ -579,6 +763,8 @@ To debug tests effectively:
 
 ## Best Practices
 
+### General Testing
+
 When writing new tests or modifying existing ones:
 
 1. **Use the Mocks Properly**: Leverage our enhanced mocks for realistic testing:
@@ -615,6 +801,83 @@ When writing new tests or modifying existing ones:
    // Better
    expect(response).toHaveProperty('success', true);
    expect(response.data).toContain('expected value');
+   ```
+
+### Intent Detection Testing
+
+When testing the intent detection system:
+
+1. **Test All Intent Categories**: Ensure each intent category has comprehensive pattern tests:
+   ```javascript
+   // Test multiple phrases for each intent category
+   const needsMoreInfoPhrases = [
+     'I need more information',
+     'Can you tell me more about your services?',
+     'What exactly do you offer?',
+     'How much does it cost?'
+   ];
+   
+   needsMoreInfoPhrases.forEach(phrase => {
+     const result = processTranscript(TEST_CALL_SID, phrase, 'lead');
+     expect(result.detectedIntents).toContain('needs_more_info');
+   });
+   ```
+
+2. **Test Priority Handling**: Verify that intent priorities are correctly applied:
+   ```javascript
+   // First detect a lower priority intent
+   processTranscript(TEST_CALL_SID, 'I need more information', 'lead');
+   
+   // Then a higher priority intent
+   processTranscript(TEST_CALL_SID, 'I need urgent help immediately', 'lead');
+   
+   // Check that higher priority intent became primary
+   const intentData = getIntentData(TEST_CALL_SID);
+   expect(intentData.primaryIntent.name).toBe('needs_immediate_care');
+   ```
+
+3. **Test Edge Cases**: Include tests for ambiguous and boundary cases:
+   ```javascript
+   // Test ambiguous intent
+   const result = processTranscript(
+     TEST_CALL_SID, 
+     'I'm not sure if I want your service, I need to think about it', 
+     'lead'
+   );
+   
+   // Check if ambiguity is properly detected
+   expect(result.ambiguous).toBe(true);
+   expect(result.possibleIntents.length).toBeGreaterThan(1);
+   ```
+
+4. **Test Intent State Management**: Verify that intent state is properly maintained and cleared:
+   ```javascript
+   // Initialize and detect an intent
+   processTranscript(TEST_CALL_SID, 'Call me back tomorrow', 'lead');
+   
+   // Verify intent was detected
+   expect(hasSchedulingIntent(TEST_CALL_SID)).toBe(true);
+   
+   // Clear data
+   clearIntentData(TEST_CALL_SID);
+   
+   // Verify data was cleared
+   expect(hasSchedulingIntent(TEST_CALL_SID)).toBe(false);
+   ```
+
+5. **Test Integration Points**: Verify that intent detection integrates properly with other systems:
+   ```javascript
+   // Test webhook integration
+   processTranscript('CA12345', 'Call me back tomorrow at 3pm', 'lead');
+   
+   // Send webhook
+   await sendWebhookForCall('CA12345');
+   
+   // Verify webhook contains intent data
+   const webhookCall = webhookStore.sent.find(call => call.callSid === 'CA12345');
+   expect(webhookCall.data).toHaveProperty('detected_intents');
+   expect(webhookCall.data.detected_intents).toContain('schedule_callback');
+   expect(webhookCall.data).toHaveProperty('callback_time', 'tomorrow at 3pm');
    ```
 
 ## Glossary of Testing Terms

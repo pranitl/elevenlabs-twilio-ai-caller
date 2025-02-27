@@ -1,6 +1,7 @@
 import WebSocket from "ws";
+import { registerTwilioWebhookValidation } from './twilio-webhook-validation.js';
 
-export function registerInboundRoutes(fastify) {
+export async function registerInboundRoutes(fastify) {
   // Check for the required environment variables
   const { 
     ELEVENLABS_API_KEY, 
@@ -25,6 +26,16 @@ export function registerInboundRoutes(fastify) {
     throw new Error("Missing ElevenLabs configuration variables");
   }
 
+  // Register Twilio webhook validation for inbound routes
+  registerTwilioWebhookValidation(fastify, [
+    '/incoming-call',
+    '/verify-caller',
+    '/inbound-media-stream'
+  ], {
+    // Skip validation in test mode
+    enforce: process.env.NODE_ENV === 'production'
+  });
+
   // Route to handle initial incoming calls with verification
   fastify.all("/incoming-call", async (request, reply) => {
     const callSid = request.body.CallSid;
@@ -33,11 +44,15 @@ export function registerInboundRoutes(fastify) {
     
     console.log(`[Twilio] Received incoming call from ${from} to ${to} with SID ${callSid}`);
     
-    // Store call details
+    // Store call details with improved tracking
     activeInboundCalls[callSid] = {
       from,
       to,
       startTime: new Date(),
+      timestamps: {
+        started: new Date().toISOString()
+      },
+      status: 'started',
       verified: false
     };
     
