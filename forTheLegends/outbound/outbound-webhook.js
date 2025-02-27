@@ -6,16 +6,7 @@ import {
   enhanceWebhookPayload,
   sendEnhancedWebhook
 } from './webhook-enhancer.js';
-
-// Configuration
-const DEFAULT_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || '';
-let webhookConfig = {
-  url: DEFAULT_WEBHOOK_URL,
-  retryAttempts: 3,
-  retryDelayMs: 1000,
-  timeoutMs: 10000,
-  enabled: true
-};
+import * as webhookConfig from './webhook-config.js';
 
 /**
  * Send ElevenLabs conversation data to webhook
@@ -28,7 +19,10 @@ let webhookConfig = {
  * @returns {Promise<Object>} - Webhook response
  */
 async function sendElevenLabsConversationData(callSid, conversationId, callStatuses, options = {}) {
-  if (!webhookConfig.enabled) {
+  // Get current webhook configuration
+  const config = webhookConfig.getWebhookConfig();
+  
+  if (!config.enabled) {
     console.log(`[Webhook] Webhooks are disabled. Not sending data for call ${callSid}`);
     return { success: false, reason: 'webhooks_disabled' };
   }
@@ -40,6 +34,14 @@ async function sendElevenLabsConversationData(callSid, conversationId, callStatu
     if (!shouldSendWebhook(callSid, callStatuses)) {
       console.log(`[Webhook] No need to send data for call ${callSid} - criteria not met`);
       return { success: false, reason: 'criteria_not_met' };
+    }
+    
+    // Get appropriate webhook URL based on call context
+    const webhookUrl = webhookConfig.getWebhookUrlForContext(callStatuses[callSid] || {});
+    
+    if (!webhookUrl) {
+      console.log(`[Webhook] No valid webhook URL for call ${callSid}`);
+      return { success: false, reason: 'no_webhook_url' };
     }
     
     // Get conversation data from ElevenLabs
@@ -56,7 +58,7 @@ async function sendElevenLabsConversationData(callSid, conversationId, callStatu
     );
     
     // Send to webhook with retries
-    return await sendWebhookWithRetry(webhookPayload);
+    return await sendWebhookWithRetry(webhookPayload, webhookUrl);
   } catch (error) {
     console.error(`[Webhook] Error sending webhook for call ${callSid}:`, error);
     return { 
@@ -107,6 +109,7 @@ function shouldSendWebhook(callSid, callStatuses) {
  */
 async function fetchElevenLabsData(conversationId) {
   const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
+  const config = webhookConfig.getWebhookConfig();
   
   if (!ELEVENLABS_API_KEY) {
     throw new Error('ELEVENLABS_API_KEY is required but not configured');
@@ -122,7 +125,7 @@ async function fetchElevenLabsData(conversationId) {
       `https://api.elevenlabs.io/v1/convai/conversation/${conversationId}/transcript`,
       {
         headers: { "xi-api-key": ELEVENLABS_API_KEY },
-        timeout: webhookConfig.timeoutMs
+        timeout: config.timeoutMs
       }
     );
     
@@ -140,7 +143,7 @@ async function fetchElevenLabsData(conversationId) {
       `https://api.elevenlabs.io/v1/convai/conversation/${conversationId}/summary`,
       {
         headers: { "xi-api-key": ELEVENLABS_API_KEY },
-        timeout: webhookConfig.timeoutMs
+        timeout: config.timeoutMs
       }
     );
     
@@ -233,21 +236,23 @@ function prepareWebhookPayload(callSid, conversationId, callStatus, transcriptDa
  * Send webhook with retry logic
  * 
  * @param {Object} payload - Webhook payload
+ * @param {string} webhookUrl - URL to send the webhook to
  * @returns {Promise<Object>} - Webhook response
  */
-async function sendWebhookWithRetry(payload) {
+async function sendWebhookWithRetry(payload, webhookUrl) {
+  const config = webhookConfig.getWebhookConfig();
   let attempts = 0;
   let lastError = null;
   
-  while (attempts < webhookConfig.retryAttempts) {
+  while (attempts < config.retryAttempts) {
     attempts++;
     
     try {
-      console.log(`[Webhook] Sending webhook attempt ${attempts}/${webhookConfig.retryAttempts}`);
+      console.log(`[Webhook] Sending webhook attempt ${attempts}/${config.retryAttempts}`);
       
-      const response = await axios.post(webhookConfig.url, payload, {
+      const response = await axios.post(webhookUrl, payload, {
         headers: { 'Content-Type': 'application/json' },
-        timeout: webhookConfig.timeoutMs
+        timeout: config.timeoutMs
       });
       
       console.log(`[Webhook] Successfully sent webhook, status: ${response.status}`);
@@ -262,15 +267,15 @@ async function sendWebhookWithRetry(payload) {
       lastError = error;
       console.error(`[Webhook] Attempt ${attempts} failed: ${error.message}`);
       
-      if (attempts < webhookConfig.retryAttempts) {
-        const delay = webhookConfig.retryDelayMs * attempts; // Exponential backoff
+      if (attempts < config.retryAttempts) {
+        const delay = config.retryDelayMs * attempts; // Exponential backoff
         console.log(`[Webhook] Retrying in ${delay}ms`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
   }
   
-  console.error(`[Webhook] All ${webhookConfig.retryAttempts} webhook attempts failed`);
+  console.error(`[Webhook] All ${config.retryAttempts} webhook attempts failed`);
   return {
     success: false,
     error: lastError?.message || 'Unknown error',
@@ -285,19 +290,27 @@ async function sendWebhookWithRetry(payload) {
  * @param {Object} config - Configuration object
  */
 function configureWebhook(config = {}) {
-  webhookConfig = {
-    ...webhookConfig,
-    ...config
-  };
-  
-  console.log('[Webhook] Configuration updated:', webhookConfig);
+  webhookConfig.updateWebhookConfig(config);
 }
 
 // Export functions for use in other modules
 export {
   sendElevenLabsConversationData,
-  configureWebhook,
   shouldSendWebhook, // Exported for testing
   fetchElevenLabsData, // Exported for testing
-  prepareWebhookPayload // Exported for testing
-}; 
+  prepareWebhookPayload, // Exported for testing
+  sendWebhookWithRetry, // Exported for testing
+  configureWebhook
+};
+
+// Support CommonJS for compatibility
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    sendElevenLabsConversationData,
+    shouldSendWebhook,
+    fetchElevenLabsData,
+    prepareWebhookPayload,
+    sendWebhookWithRetry,
+    configureWebhook
+  };
+} 

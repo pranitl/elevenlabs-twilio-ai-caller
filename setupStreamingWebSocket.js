@@ -6,6 +6,7 @@
 
 // Import webhook functionality
 import { sendElevenLabsConversationData } from './forTheLegends/outbound/index.js';
+import * as elevenLabsPrompts from './forTheLegends/prompts/elevenlabs-prompts.js';
 
 // Constants for tracking call status
 const callStatuses = {};
@@ -117,33 +118,11 @@ function setupStreamingWebSocket(ws) {
  * @returns {Object} - The formatted initialization message
  */
 function getInitializationMessage(customParameters) {
-  // Create default system prompt
-  let systemPrompt = "You are an AI assistant helping with a call. Be professional and helpful.";
-  
-  // Use custom prompt if provided
-  if (customParameters?.prompt) {
-    systemPrompt = customParameters.prompt;
-  } else if (customParameters) {
-    // Enhance the prompt with lead info
-    const leadName = customParameters.leadName || "";
-    const careNeededFor = customParameters.careNeededFor || "";
-    const careReason = customParameters.careReason || "";
-    
-    // Only add personalization if we have lead data
-    if (leadName || careNeededFor || careReason) {
-      systemPrompt += `\n\nFor this specific call: The lead's name is ${leadName}. They are inquiring about care for ${careNeededFor} who needs assistance with ${careReason}.`;
-    }
-  }
-  
-  // Return initialization message structure
-  return {
-    type: "conversation_initiation_client_data",
-    conversation_config_override: {
-      agent: {
-        system_prompt: systemPrompt
-      }
-    }
-  };
+  // Use the centralized prompt management to get a properly formatted configuration
+  return elevenLabsPrompts.getInitConfig(customParameters, {
+    // Use custom prompt if provided 
+    additionalInstructions: customParameters?.prompt ? customParameters.prompt : undefined
+  });
 }
 
 // Export for ES modules

@@ -7,6 +7,8 @@ import { v4 as uuidv4 } from "uuid";
 import twilio from "twilio";
 import dotenv from "dotenv";
 import { sendElevenLabsConversationData } from './forTheLegends/outbound/index.js';
+import * as elevenLabsPrompts from './forTheLegends/prompts/elevenlabs-prompts.js';
+import * as webhookConfig from './forTheLegends/outbound/webhook-config.js';
 
 // Import intent detection functionality from existing file
 import {
@@ -32,19 +34,6 @@ const callStatuses = {};
 
 // Store the most recent request host for use in callbacks
 let mostRecentHost = null;
-
-// Define the base prompt for ElevenLabs
-const basePrompt = `You are Heather, a friendly and warm care coordinator for First Light Home Care, a home healthcare company. You're calling to follow up on care service inquiries with a calm and reassuring voice, using natural pauses to make the conversation feel more human-like. Your main goals are:
-1. Verify the details submitted in the care request from the Point of Contact for the 'Care Needed For'.
-2. Show empathy for the care situation.
-3. Confirm interest in receiving care services for the 'Care Needed For'.
-4. Set expectations for next steps, which are to discuss with a care specialist.
-
-Use casual, friendly language, avoiding jargon and technical terms, to make the lead feel comfortable and understood. Listen carefully and address concerns with empathy, focusing on building rapport. If asked about pricing, explain that a care specialist will discuss detailed pricing options soon. If the person is not interested, thank them for their time and end the call politely.
-
-If our care team is not available to join the call, kindly explain to the person that our care specialists are currently unavailable but will contact them soon. Verify their contact information (phone number and/or email) to make sure it matches what we have on file, and ask if there's a preferred time for follow-up. Be sure to confirm all their information is correct before ending the call.
-
-IMPORTANT: When the call connects, wait for the person to say hello or acknowledge the call before you start speaking. If they don't say anything within 2-3 seconds, then begin with a warm greeting. Always start with a natural greeting like 'Hello' and pause briefly before continuing with your introduction.`;
 
 // Export the WebSocket handler for testing
 function setupStreamingWebSocket(ws) {
@@ -687,46 +676,24 @@ export function registerOutboundRoutes(fastify) {
 
             elevenLabsWs.on("open", () => {
               console.log("[ElevenLabs] Connected to Conversational AI");
-
-              // Prepare the prompt with voicemail instructions if needed
-              let fullPrompt = basePrompt;
               
-              // If we already know this is a voicemail (detected by AMD earlier), 
-              // add voicemail handling instructions
-              if (callSid && callStatuses[callSid]?.isVoicemail) {
-                // Personalize voicemail message using any available lead data
-                const leadName = customParameters?.leadName || callStatuses[callSid]?.leadInfo?.LeadName || "";
-                const careNeededFor = customParameters?.careNeededFor || callStatuses[callSid]?.leadInfo?.CareNeededFor || "a loved one";
-                const careReason = customParameters?.careReason || callStatuses[callSid]?.leadInfo?.CareReason || "home care services";
-                
-                // Create personalized voicemail instruction
-                fullPrompt += `\n\nIMPORTANT: This call has reached a voicemail. Wait for the beep, then leave a personalized message like: "Hello ${leadName ? leadName + ", " : ""}I'm calling from First Light Home Care regarding the care services inquiry ${careNeededFor ? "for " + careNeededFor : ""} ${careReason ? "who needs " + careReason : ""}. Please call us back at (555) 123-4567 at your earliest convenience to discuss how we can help. Thank you."`;
-                
-                if (!leadName && !careNeededFor && !careReason) {
-                  // Fallback to more generic message if no personalization data is available
-                  fullPrompt += "\n\nKeep the message concise but warm and professional. Focus on urgency without being pushy.";
-                } else {
-                  fullPrompt += "\n\nEnsure the message sounds natural and conversational, not like a template. Be concise as voicemails often have time limits.";
-                }
-                
-                console.log(`[ElevenLabs] Adding personalized voicemail instructions for call ${callSid}`);
-              }
-
-              // Set up the conversation with wait_for_user_speech set to true
-              const initialConfig = {
-                type: "conversation_initiation_client_data",
-                conversation_config_override: {
-                  agent: {
-                    prompt: { prompt: fullPrompt },
-                    first_message: `Hello, this is Heather from First Light Home Care. I'm calling about the care services inquiry for ${customParameters?.careNeededFor}. Is this ${customParameters?.leadName || "there"}?`,
-                    wait_for_user_speech: true,
-                  },
-                  conversation: {
-                    initial_audio_silence_timeout_ms: 3000, // Wait 3 seconds for user to speak before starting
-                  }
-                },
+              // Get lead info from call statuses or custom parameters
+              const leadInfo = callStatuses[callSid]?.leadInfo || customParameters || {};
+              
+              // Configure prompt options
+              const promptOptions = {
+                isVoicemail: callStatuses[callSid]?.isVoicemail || false,
+                waitForUserSpeech: true,
+                silenceTimeoutMs: 3000
               };
+              
+              // Get the initialization config with the proper prompt and first message
+              const initialConfig = elevenLabsPrompts.getInitConfig(leadInfo, promptOptions);
+              
+              // Send the configuration to ElevenLabs
               elevenLabsWs.send(JSON.stringify(initialConfig));
+              
+              console.log(`[ElevenLabs] Sent initialization config for call ${callSid}`);
             });
 
             elevenLabsWs.on("message", (data) => {
