@@ -45,6 +45,116 @@ If our care team is not available to join the call, kindly explain to the person
 
 IMPORTANT: When the call connects, wait for the person to say hello or acknowledge the call before you start speaking. If they don't say anything within 2-3 seconds, then begin with a warm greeting. Always start with a natural greeting like 'Hello' and pause briefly before continuing with your introduction.`;
 
+// Export the WebSocket handler for testing
+function setupStreamingWebSocket(ws) {
+  console.info("[Server] Setting up streaming WebSocket");
+
+  let streamSid = null;
+  let callSid = null;
+  let elevenLabsWs = null;
+  let customParameters = null;
+  let conversationId = null;
+
+  ws.on("error", console.error);
+
+  // Setup event handler for messages from Twilio
+  ws.on("message", async (message) => {
+    try {
+      const msg = JSON.parse(message);
+      console.log(`[Twilio] Received event: ${msg.event}`);
+      switch (msg.event) {
+        case "start":
+          streamSid = msg.start.streamSid;
+          callSid = msg.start.callSid;
+          customParameters = msg.start.customParameters;
+          console.log(
+            `[Twilio] Stream started - StreamSid: ${streamSid}, CallSid: ${callSid}`,
+          );
+          console.log("[Twilio] Custom parameters:", customParameters);
+          
+          // Store custom parameters in call statuses for later use in webhook
+          if (callSid) {
+            callStatuses[callSid].leadInfo = customParameters;
+          }
+          
+          // Check if we already know this is a voicemail from a previous AMD detection
+          if (callSid && callStatuses[callSid]?.isVoicemail) {
+            console.log(`[Twilio] Call ${callSid} is known to be a voicemail`);
+            
+            // If the ElevenLabs connection is already established, send a message to inform it that
+            // this is a voicemail and to use the appropriate prompt/behavior
+            if (elevenLabsWs?.readyState === WebSocket.OPEN) {
+              const voicemailInstruction = {
+                type: "custom_instruction",
+                instruction: "This call has reached a voicemail. Wait for the beep, then leave a brief message explaining who you are and why you're calling. Be concise as voicemails often have time limits."
+              };
+              elevenLabsWs.send(JSON.stringify(voicemailInstruction));
+            }
+          }
+          break;
+        case "media":
+          // Check if we should close the ElevenLabs connection because the call has been transferred
+          if (callSid && callStatuses[callSid]?.transferComplete) {
+            console.log(`[Twilio] Call ${callSid} has been transferred, closing ElevenLabs connection`);
+            if (elevenLabsWs?.readyState === WebSocket.OPEN) {
+              elevenLabsWs.close();
+            }
+            break;
+          }
+          
+          // Check if sales team is unavailable and we haven't informed ElevenLabs yet
+          if (callSid && 
+              callStatuses[callSid]?.salesTeamUnavailable && 
+              !callStatuses[callSid]?.salesTeamUnavailableInstructionSent && 
+              elevenLabsWs?.readyState === WebSocket.OPEN) {
+            
+            console.log(`[Twilio] Informing AI that sales team is unavailable for call ${callSid}`);
+            
+            // Enhanced instruction explicitly prompting for callback scheduling
+            const unavailableInstruction = {
+              type: "custom_instruction",
+              instruction: "I need to inform the caller that our care specialists are not available right now. Tell them: 'I'm sorry, but our care specialists are currently unavailable to join our call. However, I can schedule a callback for you at a time that works best for you.' Then ask specifically: 'When would be a good time for our team to call you back?' Wait for their response and confirm the specific day and time they prefer. Also verify their contact information (phone number and email) to ensure we have the correct details. Before ending the call, summarize the callback time and their contact information to confirm everything is correct."
+            };
+            elevenLabsWs.send(JSON.stringify(unavailableInstruction));
+            
+            // Mark that we've sent the instruction
+            callStatuses[callSid].salesTeamUnavailableInstructionSent = true;
+          }
+          
+          if (elevenLabsWs?.readyState === WebSocket.OPEN) {
+            // Log when we receive user audio to help debug conversation flow
+            if (msg.media.payload && Buffer.from(msg.media.payload, "base64").length > 0) {
+              console.log(`[Twilio] Received user audio from call ${callSid}`);
+            }
+            
+            const audioMessage = {
+              user_audio_chunk: Buffer.from(
+                msg.media.payload,
+                "base64",
+              ).toString("base64"),
+            };
+            elevenLabsWs.send(JSON.stringify(audioMessage));
+          }
+          break;
+        case "stop":
+          console.log(`[Twilio] Stream ${streamSid} ended`);
+          if (elevenLabsWs?.readyState === WebSocket.OPEN)
+            elevenLabsWs.close();
+          break;
+      }
+    } catch (error) {
+      console.error("[Twilio] Error processing message:", error);
+    }
+  });
+
+  ws.on("close", () => {
+    console.log("[Twilio] Client disconnected");
+    if (elevenLabsWs?.readyState === WebSocket.OPEN) elevenLabsWs.close();
+  });
+  
+  return ws;
+}
+
 export function registerOutboundRoutes(fastify) {
   const {
     ELEVENLABS_API_KEY,
@@ -1280,7 +1390,7 @@ export function registerOutboundRoutes(fastify) {
           });
           
           // Reset the websocket connection for the lead
-          setupElevenLabsWebSocket(leadCallSid, true);
+          setupStreamingWebSocket(ws);
         }
         
         // Mark transfer as failed
@@ -1295,4 +1405,12 @@ export function registerOutboundRoutes(fastify) {
       setTimeout(() => checkConferenceConnection(leadCallSid, salesCallSid, conferenceRoom), 10000);
     }
   }
+}
+
+// Export for both ES modules and CommonJS
+export { setupStreamingWebSocket, callStatuses };
+
+// Support CommonJS for compatibility with tests
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { setupStreamingWebSocket, callStatuses, registerOutboundRoutes };
 }

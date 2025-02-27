@@ -217,7 +217,7 @@ describe('Inbound Calls Functionality', () => {
       }));
       
       // Simulate close event
-      wsConnection.emit('close');
+      wsConnection.close();
     });
   });
 }); 
