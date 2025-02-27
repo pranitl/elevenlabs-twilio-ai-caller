@@ -25,7 +25,7 @@
     "dotenv": "^16.4.7",
     "elevenlabs": "^0.18.1",
     "express": "^4.21.2",
-    "fastify": "^5.1.0",
+    "fastify": "^4.24.3",
     "node-fetch": "^3.3.2",
     "twilio": "^5.3.7",
     "uuid": "^11.1.0",
