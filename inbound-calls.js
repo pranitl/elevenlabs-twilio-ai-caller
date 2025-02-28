@@ -1,6 +1,9 @@
 import WebSocket from "ws";
 import { registerTwilioWebhookValidation } from './twilio-webhook-validation.js';
 
+// Import centralized Twilio prompts
+import { INBOUND, escapeTwiMLText } from './forTheLegends/prompts/twilio-prompts.js';
+
 export async function registerInboundRoutes(fastify) {
   // Check for the required environment variables
   const { 
@@ -14,6 +17,7 @@ export async function registerInboundRoutes(fastify) {
 
   // Track active call data
   const activeInboundCalls = {};
+  const activeElevenLabsConnections = {};
 
   // Check for the required environment variables
   if (!SALES_TEAM_PHONE_NUMBER) {
@@ -60,9 +64,9 @@ export async function registerInboundRoutes(fastify) {
     const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
       <Response>
         <Gather numDigits="1" action="/verify-caller" method="POST" timeout="10">
-          <Say>Thank you for calling. To speak with our sales team, please press 1. To leave a message, press 2.</Say>
+          <Say>${escapeTwiMLText(INBOUND.WELCOME.DEFAULT)}</Say>
         </Gather>
-        <Say>We didn't receive any input. Goodbye.</Say>
+        <Say>${escapeTwiMLText(INBOUND.ERROR.NO_INPUT)}</Say>
         <Hangup/>
       </Response>`;
 
@@ -89,10 +93,12 @@ export async function registerInboundRoutes(fastify) {
       
       twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
         <Response>
-          <Say>Thank you. Connecting you to our sales team now.</Say>
+          <Say>${escapeTwiMLText(INBOUND.SALES_TEAM.CONNECTING)}</Say>
           <Dial callerId="${TWILIO_PHONE_NUMBER}">
             ${SALES_TEAM_PHONE_NUMBER}
           </Dial>
+          <Say>${escapeTwiMLText(INBOUND.SALES_TEAM.UNABLE_TO_CONNECT)}</Say>
+          <Hangup/>
         </Response>`;
     } else if (digits === "2") {
       // Caller wants to leave a message - connect to ElevenLabs AI
@@ -115,7 +121,7 @@ export async function registerInboundRoutes(fastify) {
       // Invalid input
       twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
         <Response>
-          <Say>Invalid selection. Goodbye.</Say>
+          <Say>${escapeTwiMLText(INBOUND.ERROR.INVALID_SELECTION)}</Say>
           <Hangup/>
         </Response>`;
     }

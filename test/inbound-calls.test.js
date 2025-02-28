@@ -5,6 +5,23 @@ import { jest } from '@jest/globals';
 import { createMockFastify } from './setup.js';
 import { registerInboundRoutes } from '../inbound-calls.js';
 
+// Test suite for inbound call handling
+// const { setupInboundCallHandling } = require('../inbound-calls');
+import WebSocket from 'ws';
+
+// Import the prompts for testing
+import { INBOUND, escapeTwiMLText } from '../forTheLegends/prompts/twilio-prompts.js';
+
+// Mock the WebSocket class
+jest.mock('ws');
+
+// Mock the environment variables
+process.env.TWILIO_ACCOUNT_SID = 'test_account_sid';
+process.env.TWILIO_AUTH_TOKEN = 'test_auth_token';
+process.env.TWILIO_PHONE_NUMBER = '+15551234567';
+process.env.SALES_TEAM_PHONE_NUMBER = '+15559876543';
+process.env.ELEVENLABS_API_KEY = 'test_elevenlabs_key';
+
 describe('Inbound Calls Functionality', () => {
   let fastify;
   
@@ -59,19 +76,24 @@ describe('Inbound Calls Functionality', () => {
       expect(twimlResponse).toContain('<Gather');
       expect(twimlResponse).toContain('action="/verify-caller"');
       expect(twimlResponse).toContain('numDigits="1"');
+      
+      // Verify the prompt text is included - check for escaped versions
+      expect(twimlResponse).toContain(escapeTwiMLText(INBOUND.WELCOME.DEFAULT));
+      expect(twimlResponse).toContain(escapeTwiMLText(INBOUND.ERROR.NO_INPUT));
     });
   });
   
   describe('Caller Verification', () => {
-    test('should forward to sales team when caller presses 1', async () => {
-      // Find the verify caller route handler
+    test('should route to sales team when caller presses 1', async () => {
+      // Find the verify-caller route handler
       const routeHandler = fastify.routes.find(r => r.path === '/verify-caller').handler;
       
-      // Create mock request and reply for pressing 1 (sales team)
+      // Create mock request and reply
       const request = {
         body: {
           CallSid: 'CA123456789',
           From: '+15551234567',
+          To: '+15559876543',
           Digits: '1'
         }
       };
@@ -92,17 +114,22 @@ describe('Inbound Calls Functionality', () => {
       const twimlResponse = reply.send.mock.calls[0][0];
       expect(twimlResponse).toContain('<Dial');
       expect(twimlResponse).toContain(process.env.SALES_TEAM_PHONE_NUMBER);
+      
+      // Verify the prompt text is included
+      expect(twimlResponse).toContain(INBOUND.SALES_TEAM.CONNECTING);
+      expect(twimlResponse).toContain(INBOUND.SALES_TEAM.UNABLE_TO_CONNECT);
     });
     
-    test('should connect to AI assistant when caller presses 2', async () => {
-      // Find the verify caller route handler
+    test('should connect to AI when caller presses 2', async () => {
+      // Find the verify-caller route handler
       const routeHandler = fastify.routes.find(r => r.path === '/verify-caller').handler;
       
-      // Create mock request and reply for pressing 2 (leave message with AI)
+      // Create mock request and reply
       const request = {
         body: {
           CallSid: 'CA123456789',
           From: '+15551234567',
+          To: '+15559876543',
           Digits: '2'
         }
       };
@@ -126,16 +153,17 @@ describe('Inbound Calls Functionality', () => {
       expect(twimlResponse).toContain('/inbound-ai-stream');
     });
     
-    test('should handle invalid digits', async () => {
-      // Find the verify caller route handler
+    test('should hangup for invalid input', async () => {
+      // Find the verify-caller route handler
       const routeHandler = fastify.routes.find(r => r.path === '/verify-caller').handler;
       
-      // Create mock request and reply for pressing an invalid digit
+      // Create mock request and reply
       const request = {
         body: {
           CallSid: 'CA123456789',
           From: '+15551234567',
-          Digits: '3' // Invalid option
+          To: '+15559876543',
+          Digits: '9' // Invalid option
         }
       };
       
@@ -153,7 +181,7 @@ describe('Inbound Calls Functionality', () => {
       
       // Check that the TwiML response contains a hangup for invalid option
       const twimlResponse = reply.send.mock.calls[0][0];
-      expect(twimlResponse).toContain('Invalid selection');
+      expect(twimlResponse).toContain(INBOUND.ERROR.INVALID_SELECTION);
       expect(twimlResponse).toContain('<Hangup/>');
     });
   });

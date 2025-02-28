@@ -30,6 +30,9 @@ import {
   scheduleRetryCall
 } from './forTheLegends/outbound/retry-manager.js';
 
+// Import centralized Twilio prompts
+import { OUTBOUND, CONFERENCE, escapeTwiMLText, getSalesTeamNotificationMessage } from './forTheLegends/prompts/twilio-prompts.js';
+
 dotenv.config();
 
 // Define all possible status events for comprehensive call tracking
@@ -375,13 +378,17 @@ async function registerOutboundRoutes(fastify) {
     const leadName = request.query.leadName || "";
     const careReason = request.query.careReason || "";
     const careNeededFor = request.query.careNeededFor || "";
+    
+    // Use the centralized notification message with proper formatting
+    const notificationMessage = getSalesTeamNotificationMessage({
+      leadName,
+      careReason,
+      careNeededFor
+    });
 
     const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
       <Response>
-        <Say>You're being connected to an AI-assisted call with ${leadName || "a potential client"}.
-        The AI will speak with the lead about ${careReason || "home care services"}
-        ${careNeededFor ? `for ${careNeededFor}` : ""}.
-        Please wait while we connect you. If the call goes to voicemail, you will be notified.</Say>
+        <Say>${escapeTwiMLText(notificationMessage)}</Say>
         <Pause length="60"/>
       </Response>`;
     reply.type("text/xml").send(twimlResponse);
@@ -775,13 +782,16 @@ async function registerOutboundRoutes(fastify) {
     // Get the server host to construct the audio URL
     const serverHost = mostRecentHost || request.headers.host;
     
+    // Use the conference room name
+    const conferenceRoom = `ConferenceRoom_${salesCallSid}`;
+    
     // Use the local handoff.mp3 file instead of text-to-speech
     const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
       <Response>
         <Play>https://${serverHost}/audio/handoff.mp3</Play>
         <Dial>
           <Conference waitUrl="https://twimlets.com/holdmusic?Bucket=com.twilio.music.classical" statusCallbackEvent="join leave" beep="false">
-            ConferenceRoom_${salesCallSid}
+            ${conferenceRoom}
           </Conference>
         </Dial>
       </Response>`;
@@ -797,6 +807,7 @@ async function registerOutboundRoutes(fastify) {
     
     const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
       <Response>
+        <Say>${escapeTwiMLText(CONFERENCE.NOTIFICATIONS.JOINING)}</Say>
         <Dial>
           <Conference waitUrl="https://twimlets.com/holdmusic?Bucket=com.twilio.music.classical" beep="false">
             ${conferenceRoomSid}

@@ -12,6 +12,9 @@ import { createMockFastify } from '../setup.js';
 import { registerOutboundRoutes } from '../../outbound-calls.js';
 import { sendMessageTo } from '../mocks/websocket-mock.js';
 
+// Import centralized Twilio prompts for testing
+import { getSalesTeamNotificationMessage, escapeTwiMLText } from '../../forTheLegends/prompts/twilio-prompts.js';
+
 // Load the exact payload structure from makePayload.txt for testing
 let makePayloadTemplate;
 try {
@@ -216,21 +219,39 @@ describe('Make.com Payload Integration Tests', () => {
   });
   
   test('should pass Make.com payload fields to Twilio TwiML generation', async () => {
-    // 1. Initiate a call with the Make.com payload
-    const initCallResponse = await simulateOutboundCallRequest(fastify, makePayloadTemplate);
+    // 1. Simulate a request to the initiateCall endpoint
+    const callRequest = {
+      body: {
+        number: makePayloadTemplate.number,
+        prompt: "",
+        leadinfo: makePayloadTemplate.leadinfo
+      },
+      headers: {
+        host: 'test.example.com'
+      }
+    };
     
-    // Skip the success check since we're already testing the payload fields
-    // expect(initCallResponse.success).toBe(true);
+    const callReply = {
+      code: jest.fn().mockReturnThis(),
+      status: jest.fn().mockReturnThis(),
+      send: jest.fn().mockReturnThis(),
+      type: jest.fn().mockReturnThis()
+    };
+    
+    // Find the outbound-call-to-sales handler
+    const initiateCallHandler = fastify.routes.find(r => r.path === '/outbound-call-to-sales').handler;
+    await initiateCallHandler(callRequest, callReply);
     
     // 2. Simulate a request to the outbound-call-twiml endpoint
     const twimlRequest = {
       query: {
+        prompt: '',
         leadName: makePayloadTemplate.leadinfo.LeadName,
         careReason: makePayloadTemplate.leadinfo.CareReason,
         careNeededFor: makePayloadTemplate.leadinfo.CareNeededFor
       },
       headers: {
-        host: 'example.com'
+        host: 'test.example.com'
       }
     };
     
@@ -260,7 +281,7 @@ describe('Make.com Payload Integration Tests', () => {
         careNeededFor: makePayloadTemplate.leadinfo.CareNeededFor
       },
       headers: {
-        host: 'example.com'
+        host: 'test.example.com'
       }
     };
     
@@ -277,13 +298,18 @@ describe('Make.com Payload Integration Tests', () => {
     expect(salesTwimlReply.type).toHaveBeenCalledWith('text/xml');
     expect(salesTwimlReply.send).toHaveBeenCalled();
     
-    const salesTwimlResponse = salesTwimlReply.send.mock.calls[0][0];
-    expect(salesTwimlResponse).toContain(makePayloadTemplate.leadinfo.LeadName);
-    expect(salesTwimlResponse).toContain(makePayloadTemplate.leadinfo.CareReason);
+    // Get the expected notification message
+    const expectedMessage = getSalesTeamNotificationMessage({
+      leadName: makePayloadTemplate.leadinfo.LeadName,
+      careReason: makePayloadTemplate.leadinfo.CareReason,
+      careNeededFor: makePayloadTemplate.leadinfo.CareNeededFor
+    });
     
-    if (makePayloadTemplate.leadinfo.CareNeededFor) {
-      expect(salesTwimlResponse).toContain(makePayloadTemplate.leadinfo.CareNeededFor);
-    }
+    // Use the escapeTwiMLText function on the expected message
+    const escapedMessage = escapeTwiMLText(expectedMessage);
+    
+    const salesTwimlResponse = salesTwimlReply.send.mock.calls[0][0];
+    expect(salesTwimlResponse).toContain(escapedMessage);
   });
   
   // Helper function to simulate an outbound call request

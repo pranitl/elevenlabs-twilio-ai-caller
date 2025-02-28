@@ -151,7 +151,7 @@ describe('Inbound Calls', () => {
       
       // Verify response
       expect(mockReply.type).toHaveBeenCalledWith('text/xml');
-      expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('<Say>Thank you. Connecting you to our sales team now.</Say>'));
+      expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('<Say>Connecting you to our sales team. Please hold.</Say>'));
       expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining(`<Dial callerId="${process.env.TWILIO_PHONE_NUMBER}">`));
       expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining(process.env.SALES_TEAM_PHONE_NUMBER));
     });

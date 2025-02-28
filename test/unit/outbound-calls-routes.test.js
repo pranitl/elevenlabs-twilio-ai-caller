@@ -49,6 +49,9 @@ jest.mock('twilio', () => mockTwilio);
 // Import the module after all mocks are set up
 import { registerOutboundRoutes } from '../../outbound-calls.js';
 
+// Import centralized Twilio prompts for testing
+import { getSalesTeamNotificationMessage, escapeTwiMLText } from '../../forTheLegends/prompts/twilio-prompts.js';
+
 // Helper function to manually inspect the handler code to debug the issue
 const inspectOutboundCallHandler = (handler) => {
   // Return a decorated handler that wraps the original
@@ -181,18 +184,32 @@ describe('Outbound Calls Routes', () => {
       
       // Set up query parameters
       mockRequest.query = {
-        leadName: 'Test Lead',
-        careReason: 'Test Reason',
-        careNeededFor: 'Test Patient'
+        prompt: 'test prompt',
+        leadName: 'John Doe',
+        careReason: 'memory care',
+        careNeededFor: 'mother'
       };
+      
+      // Set up the request headers
+      mockRequest.headers = { host: 'test.example.com' };
       
       // Call handler
       await routeHandlers['/outbound-call-twiml'](mockRequest, mockReply);
       
       // Verify response is XML
       expect(mockReply.type).toHaveBeenCalledWith('text/xml');
-      expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('<?xml version="1.0" encoding="UTF-8"?>'));
-      expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('<Stream url="wss://'));
+      expect(mockReply.send).toHaveBeenCalled();
+      
+      // Verify the TwiML content
+      const twimlResponse = mockReply.send.mock.calls[0][0];
+      expect(twimlResponse).toContain('<?xml version="1.0" encoding="UTF-8"?>');
+      expect(twimlResponse).toContain('<Response>');
+      expect(twimlResponse).toContain('<Connect>');
+      expect(twimlResponse).toContain(`<Stream url="wss://${mockRequest.headers.host}/outbound-media-stream">`);
+      expect(twimlResponse).toContain('<Parameter name="prompt" value="test prompt" />');
+      expect(twimlResponse).toContain('<Parameter name="leadName" value="John Doe" />');
+      expect(twimlResponse).toContain('<Parameter name="careReason" value="memory care" />');
+      expect(twimlResponse).toContain('<Parameter name="careNeededFor" value="mother" />');
     });
   });
 
@@ -203,18 +220,38 @@ describe('Outbound Calls Routes', () => {
       
       // Set up query parameters
       mockRequest.query = {
-        leadName: 'Test Lead',
-        careReason: 'Test Reason',
-        careNeededFor: 'Test Patient'
+        leadName: 'John Doe',
+        careReason: 'memory care',
+        careNeededFor: 'mother'
       };
+      
+      // Setup request headers
+      mockRequest.headers = { host: 'test.example.com' };
       
       // Call handler
       await routeHandlers['/sales-team-twiml'](mockRequest, mockReply);
       
       // Verify response is XML
       expect(mockReply.type).toHaveBeenCalledWith('text/xml');
-      expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('<?xml version="1.0" encoding="UTF-8"?>'));
-      expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('<Say>'));
+      expect(mockReply.send).toHaveBeenCalled();
+      
+      // Get the expected notification message
+      const expectedMessage = getSalesTeamNotificationMessage({
+        leadName: 'John Doe',
+        careReason: 'memory care',
+        careNeededFor: 'mother'
+      });
+      
+      // Escaped message is what should appear in the XML
+      const escapedMessage = escapeTwiMLText(expectedMessage);
+      
+      // Verify the TwiML content contains the expected message
+      const twimlResponse = mockReply.send.mock.calls[0][0];
+      expect(twimlResponse).toContain('<?xml version="1.0" encoding="UTF-8"?>');
+      expect(twimlResponse).toContain('<Response>');
+      expect(twimlResponse).toContain('<Say>');
+      expect(twimlResponse).toContain(escapedMessage);
+      expect(twimlResponse).toContain('<Pause length="60"/>');
     });
   });
 
