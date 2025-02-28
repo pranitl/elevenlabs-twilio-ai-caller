@@ -21,9 +21,10 @@ if (typeof global !== 'undefined') {
 /**
  * Sets up a WebSocket connection for streaming audio between Twilio and ElevenLabs
  * @param {WebSocket} ws - The WebSocket connection from Twilio
+ * @param {function} [webSocketConstructor=WebSocket] - WebSocket constructor (for testing)
  * @returns {WebSocket} - The configured WebSocket
  */
-function setupStreamingWebSocket(ws) {
+function setupStreamingWebSocket(ws, webSocketConstructor = WebSocket) {
   console.info("[Server] Setting up streaming WebSocket");
 
   let streamSid = null;
@@ -66,8 +67,8 @@ function setupStreamingWebSocket(ws) {
           // Initialize ElevenLabs connection
           try {
             console.log('[ElevenLabs] Creating WebSocket connection');
-            // Create WebSocket connection
-            elevenLabsWs = new WebSocket('wss://api.elevenlabs.io/websocket');
+            // Create WebSocket connection, using the provided constructor
+            elevenLabsWs = new webSocketConstructor('wss://api.elevenlabs.io/websocket');
             
             console.log('[ElevenLabs] WebSocket created:', elevenLabsWs);
             

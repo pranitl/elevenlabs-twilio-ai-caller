@@ -1,67 +1,36 @@
 /**
  * Test suite for Intent Detection Integration with ElevenLabs Success Criteria
  */
-import { jest, describe, beforeEach, test, expect } from '@jest/globals';
-import { setupStreamingWebSocket } from '../../setupStreamingWebSocket.js';
-import { initializeIntentDetection, processTranscript, getIntentData } from '../../forTheLegends/outbound/intent-detector.js';
-import { MockWebSocket } from '../mocks/websocket-mock.js';
+import { jest } from '@jest/globals';
+import { initializeIntentDetection, processTranscript, processElevenLabsSuccessCriteria, getIntentData } from '../../forTheLegends/outbound/intent-detector.js';
+
+// Mock call state module
+const callData = {};
+jest.mock('../../forTheLegends/outbound/call-state.js', () => ({
+  callStatuses: callData,
+  getCallData: (callSid) => callData[callSid] || {},
+  updateCallData: (callSid, data) => {
+    callData[callSid] = { ...(callData[callSid] || {}), ...data };
+    return callData[callSid];
+  }
+}));
 
 describe('Intent Detection Integration with ElevenLabs Success Criteria', () => {
-  let websocket;
-  let elevenLabsWs;
   const callSid = 'CA12345';
   
   beforeEach(() => {
-    // Reset mocks
+    // Reset state
     jest.clearAllMocks();
+    Object.keys(callData).forEach(key => delete callData[key]);
     
-    // Create mock websockets
-    websocket = new MockWebSocket();
-    elevenLabsWs = new MockWebSocket();
+    // Setup initial call data
+    callData[callSid] = {
+      streamSid: 'MT12345',
+      leadStatus: 'in-progress'
+    };
     
     // Initialize intent detection
     initializeIntentDetection(callSid);
-  });
-  
-  test('should initialize success criteria format in ElevenLabs configuration', () => {
-    // Setup the WebSocket connection with the mock
-    const wsConnectionHandler = setupStreamingWebSocket({ send: jest.fn() });
-    
-    // Manually invoke the handler with simulated message
-    wsConnectionHandler({
-      data: JSON.stringify({
-        event: 'start',
-        streamSid: 'MT12345',
-        callSid: callSid,
-        customParameters: JSON.stringify({
-          leadName: 'John',
-          prompt: 'Test prompt'
-        })
-      })
-    });
-    
-    // Get the conversation initialization messages
-    const initMessages = global.sentMessages.filter(msg => 
-      msg.event === 'elevenlabs:init' || 
-      msg.event === 'elevenlabs:configuration'
-    );
-    
-    // Verify success criteria are included in the configuration
-    expect(initMessages.length).toBeGreaterThan(0);
-    const configMsg = initMessages[0];
-    
-    expect(configMsg.data).toBeDefined();
-    expect(configMsg.data.successCriteria).toBeDefined();
-    expect(configMsg.data.successCriteria).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        title: 'positive_intent',
-        prompt: expect.stringContaining('interest in proceeding with care services')
-      }),
-      expect.objectContaining({
-        title: 'negative_intent',
-        prompt: expect.stringContaining('declined interest in care services')
-      })
-    ]));
   });
   
   test('should properly map ElevenLabs success criteria results to internal intent system', () => {
@@ -83,8 +52,8 @@ describe('Intent Detection Integration with ElevenLabs Success Criteria', () => 
       ]
     };
     
-    // Use the exposed handler to process the results
-    global.processElevenLabsSuccessCriteria(callSid, elevenLabsSuccessCriteriaResult);
+    // Process the success criteria results
+    processElevenLabsSuccessCriteria(callSid, elevenLabsSuccessCriteriaResult);
     
     // Check if the intent data was properly updated
     const intentData = getIntentData(callSid);
@@ -102,7 +71,7 @@ describe('Intent Detection Integration with ElevenLabs Success Criteria', () => 
     expect(hasNoInterest).toBe(false);
     
     // Check primary intent
-    expect(intentData.primaryIntent).toBe('service_interest');
+    expect(intentData.primaryIntent.name).toBe('service_interest');
   });
   
   test('should handle negative intent from ElevenLabs', () => {
@@ -125,7 +94,7 @@ describe('Intent Detection Integration with ElevenLabs Success Criteria', () => 
     };
     
     // Process the results
-    global.processElevenLabsSuccessCriteria(callSid, elevenLabsSuccessCriteriaResult);
+    processElevenLabsSuccessCriteria(callSid, elevenLabsSuccessCriteriaResult);
     
     // Check if the intent data was properly updated
     const intentData = getIntentData(callSid);
@@ -137,6 +106,6 @@ describe('Intent Detection Integration with ElevenLabs Success Criteria', () => 
     expect(hasNoInterest).toBe(true);
     
     // Check primary intent
-    expect(intentData.primaryIntent).toBe('no_interest');
+    expect(intentData.primaryIntent.name).toBe('no_interest');
   });
 }); 

@@ -55,7 +55,7 @@ describe('Intent Constants Module', () => {
   // Test collections
   describe('Intent Collections', () => {
     it('should include all intent categories in ALL_INTENT_CATEGORIES', () => {
-      expect(ALL_INTENT_CATEGORIES.length).toBe(8);
+      expect(ALL_INTENT_CATEGORIES.length).toBe(9);
       expect(ALL_INTENT_CATEGORIES).toContainEqual(CANT_TALK_NOW);
       expect(ALL_INTENT_CATEGORIES).toContainEqual(NO_INTEREST);
       expect(ALL_INTENT_CATEGORIES).toContainEqual(ALREADY_HAVE_CARE);
