@@ -12,6 +12,7 @@ This project integrates Twilio's telephony capabilities with ElevenLabs' convers
 - **WebSocket Support**: Real-time audio streaming
 - **Outbound Webhooks**: Send conversation transcripts and summaries to make.com
 - **Intent Detection**: Centralized system for detecting and responding to caller intents
+- **Modular Architecture**: Refactored code structure for better testability and maintainability
 
 ## Prerequisites
 - Node.js (v20 or higher)
@@ -48,6 +49,19 @@ MAKE_WEBHOOK_URL=your_make_webhook_url
 
 4. **Prepare Audio Files**
 - Place `handoff.mp3` in the root directory for call transfers
+
+## Code Structure
+
+The application code is organized in a modular structure for better maintainability:
+
+- `app.js` - Main entry point that initializes the server
+- `outbound-calls.js` - Handles outbound call routing and management
+- `inbound-calls.js` - Manages inbound call logic
+- `forTheLegends/` - Contains modular components:
+  - `outbound/call-state.js` - Manages call state with getter/setter functions
+  - `outbound/conference-events.js` - Handles conference event processing
+  - `outbound/elevenlabs-client.js` - ElevenLabs API client
+- `test/` - Test suites for validation and regression testing
 
 5. **Run the Application**
 ```bash
